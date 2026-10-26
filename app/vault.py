@@ -56,8 +56,8 @@ class Vault:
         with self._lock:
             if self.initialized:
                 raise VaultError("保险库已初始化")
-            if len(password) < 8:
-                raise VaultError("主密码至少 8 位")
+            if not password:
+                raise VaultError("主密码不能为空")
             salt = os.urandom(16)
             key = _derive(password, salt)
             db.set_meta("kdf_salt", salt.hex())
@@ -101,8 +101,8 @@ class Vault:
         return _dec(self._key, blob).decode()
 
     def change_password(self, old: str, new: str):
-        if len(new) < 8:
-            raise VaultError("新主密码至少 8 位")
+        if not new:
+            raise VaultError("新主密码不能为空")
         old_key = self._check(old)
         if not old_key:
             raise VaultError("原主密码错误")

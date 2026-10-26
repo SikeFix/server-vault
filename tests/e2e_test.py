@@ -35,10 +35,20 @@ def ok(cond, msg):
 
 def main():
     data_dir = tempfile.mkdtemp(prefix="sv-test-")
+    ssh_dir = Path(tempfile.mkdtemp(prefix="sv-ssh-"))
+    sys.path.insert(0, str(ROOT))
+    from app.ssh import generate_ed25519
+    priv, pub = generate_ed25519("me@mac")
+    (ssh_dir / "id_ed25519").write_text(priv)
+    (ssh_dir / "id_ed25519").chmod(0o600)
+    (ssh_dir / "id_ed25519.pub").write_text(pub + "\n")
+    (ssh_dir / "config").write_text("Host existing\n  HostName 10.0.0.1\n")
+    global SSH_DIR
+    SSH_DIR = ssh_dir
     mock_stop = mock_sshd.start(2222)
     mock2_stop = mock_sshd.start(2223, paramiko.RSAKey.generate(2048))
     srv = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(PORT)],
-                           cwd=ROOT, env={**os.environ, "SV_DATA_DIR": data_dir},
+                           cwd=ROOT, env={**os.environ, "SV_DATA_DIR": data_dir, "SV_SSH_DIR": str(ssh_dir), "SV_KEYCHAIN": "0"},
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
         for _ in range(50):
@@ -65,7 +75,7 @@ def run_tests(mock2_stop, data_dir):
     st = c.get("/api/state").json()
     ok(st["initialized"] is False and st["authed"] is False, "初始状态未初始化")
     ok(c.get("/api/servers").status_code == 401, "未登录访问被拒绝")
-    ok(c.post("/api/init", json={"password": "short"}).status_code == 400, "主密码过短被拒绝")
+    ok(c.post("/api/init", json={"password": ""}).status_code == 400, "空主密码被拒绝")
     ok(c.post("/api/init", json={"password": MASTER}).status_code == 200, "初始化保险库")
     ok(c.get("/api/state").json()["authed"], "初始化后已登录")
 
@@ -205,6 +215,38 @@ def run_tests(mock2_stop, data_dir):
     ok(r.status_code == 400 and "root" in r.json()["detail"], "无 sudo 账号给出权限提示")
     res = c.post("/api/bt/reset", json={"ids": [web["id"], dep["id"]]}).json()
     ok(all(x["ok"] for x in res) and bt_db()["users"][0]["password"] == salt(c.get(f"/api/servers/{dep['id']}/bt/secret").json()["password"]), "批量修改宝塔密码")
+
+    print("[6d] 快速添加 / 临时服务器 / 算力服务器")
+    ok(c.post("/api/servers/quick", json={"host": "127.0.0.1", "port": 2222, "password": "x"}).json()["detail"].startswith("已存在"), "重复服务器被拒绝")
+    r = c.post("/api/servers/quick", json={"host": "127.0.0.1", "port": 2222, "username": "gpu", "password": "GpuPass#1", "temp_days": 7}).json()
+    q = r["server"]
+    ok(q["status"] == "online" and q["auth_type"] == "key" and q["group_name"] == "临时", f"只填 IP+密码即添加成功并自动检测 ({q['name']})")
+    ok(any("公钥" in x for x in r["steps"]) and any("config" in x for x in r["steps"]), "步骤:安装公钥、写入 ssh config")
+    ak = (mock_sshd.home("gpu") / ".ssh" / "authorized_keys").read_text()
+    ok("me@mac" in ak, "本机公钥已写入服务器 authorized_keys")
+    cfg = (SSH_DIR / "config").read_text()
+    ok(f"# >>> server-vault: {q['name']} >>>" in cfg and "HostName 127.0.0.1" in cfg and "Port 2222" in cfg and "Host existing" in cfg, "写入 ~/.ssh/config 且保留原有内容")
+    ok("[127.0.0.1]:2222" in (SSH_DIR / "known_hosts").read_text(), "主机指纹写入 known_hosts")
+    ok(q["temp_expires_at"] and q["temp_expires_at"] > "2026", "临时服务器带到期时间")
+    ok(q["kind"] == "compute" and q["facts"]["gpu_summary"] == "2× NVIDIA A100-SXM4-80GB" and q["facts"]["gpu_cuda"] == "12.4", "自动识别为算力服务器(2× A100 / CUDA 12.4)")
+    ok(len(q["status_detail"]["gpus"]) == 2 and q["status_detail"]["gpus"][0]["util"] == 87, "状态检测含每张卡利用率")
+    g = c.get(f"/api/servers/{q['id']}/gpu").json()
+    ok(g["gpus"][0]["power"] == 310.5 and g["processes"][0]["pid"] == 1 and g["processes"][0]["gpu"] == 0 and g["processes"][0]["user"], "实时 GPU:功耗、占用进程及用户")
+    ok(c.get(f"/api/servers/{web['id']}/gpu").status_code == 400, "普通服务器查询 GPU 给出提示")
+    kinds = {x["name"]: x["kind"] for x in c.get("/api/servers?kind=compute").json()}
+    ok(list(kinds.values()) == ["compute"], "按类型筛选算力服务器")
+    c.put(f"/api/servers/{q['id']}", json={"server_type": "normal"})
+    ok(c.get(f"/api/servers/{q['id']}").json()["kind"] == "normal", "可手动指定类型")
+    c.put(f"/api/servers/{q['id']}", json={"server_type": "auto"})
+    res = c.post("/api/servers/quick", json={"batch": "127.0.0.1 OpsPass#bad 2222 ops\n127.0.0.1 DevPass#1 2222 nosuch", "install_key": False}).json()
+    ok(len(res) == 2 and not any(x["ok"] for x in res), "批量添加:错误密码逐条报告")
+    import sqlite3
+    con = sqlite3.connect(Path(data_dir) / "vault.db")
+    con.execute("UPDATE servers SET temp_expires_at='2000-01-01T00:00:00+00:00' WHERE id=?", (q["id"],))
+    con.commit()
+    con.close()
+    ok(all(x["id"] != q["id"] for x in c.get("/api/servers").json()), "临时服务器到期自动移除")
+    ok(f"server-vault: {q['name']}" not in (SSH_DIR / "config").read_text() and "Host existing" in (SSH_DIR / "config").read_text(), "移除时同步清理 ssh config")
 
     print("[7] 自动化任务")
     a = c.post("/api/automations", json={"name": "巡检", "script": "echo check-$(whoami)", "target_type": "group",

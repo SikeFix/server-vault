@@ -42,13 +42,19 @@ def _brief(row):
         "status": p["status"], "latency_ms": p["latency_ms"], "load": d.get("load"),
         "os": f.get("os"), "model": f.get("model"), "cpu_cores": f.get("cpu_cores"),
         "mem_total_gb": round(f["mem_total"] / 1024**3, 1) if f.get("mem_total") else None,
-        "last_checked_at": p["last_checked_at"],
+        "last_checked_at": p["last_checked_at"], "kind": p["kind"],
+        "gpu": f.get("gpu_summary"), "temporary_until": p["temp_expires_at"],
     }
 
 
-def list_servers(ctx, group=None, status=None, keyword=None):
+def list_servers(ctx, group=None, status=None, keyword=None, kind=None):
     ctx.need("read")
-    return [_brief(r) for r in S.list_rows(ctx.groups, group, status, keyword)]
+    return [_brief(r) for r in S.list_rows(ctx.groups, group, status, keyword, kind)]
+
+
+def gpu_status(ctx, ref):
+    ctx.need("read")
+    return S.gpu_live(S.resolve(ref, ctx.groups), actor=ctx.actor)
 
 
 def get_server(ctx, ref):

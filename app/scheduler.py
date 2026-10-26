@@ -58,6 +58,8 @@ def tick():
     if not vault.unlocked:
         return
     st = S.get_settings()
+    if _due("sched_cleanup_at", 300):
+        _spawn("cleanup", S.cleanup_expired)
     for r in db.all("SELECT id FROM servers WHERE rotation_enabled=1 AND next_rotation_at IS NOT NULL AND next_rotation_at<=?",
                     (S.now_iso(),)):
         _spawn(f"rotate:{r['id']}", _rotate, r["id"])

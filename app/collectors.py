@@ -50,6 +50,18 @@ if [ -d "$BTP" ]; then
   k bt_ssl "$( { [ -f "$BTP/data/ssl.pl" ] || $S test -f "$BTP/data/ssl.pl"; } 2>/dev/null && echo 1 || echo 0)"
   k bt_running "$(pgrep -f BT-Panel >/dev/null 2>&1 && echo 1 || echo 0)"
 fi
+# ---- 算力:NVIDIA / 昇腾 NPU / PCI 加速卡 ----
+if command -v nvidia-smi >/dev/null 2>&1; then
+  k gpu_vendor nvidia
+  k gpu_driver "$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+  k gpu_cuda "$(nvidia-smi 2>/dev/null | grep -oE 'CUDA Version: *[0-9.]+' | grep -oE '[0-9.]+$')"
+  k gpus "$(nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit --format=csv,noheader,nounits 2>/dev/null | tr '\n' ';')"
+elif command -v npu-smi >/dev/null 2>&1; then
+  k gpu_vendor ascend
+  k gpu_driver "$(cat /usr/local/Ascend/driver/version.info 2>/dev/null | grep -m1 -i version | cut -d= -f2)"
+  k npu_raw "$(npu-smi info 2>/dev/null | head -120 | base64 | tr -d '\n')"
+fi
+k gpu_pci "$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display controller|processing accelerators' | grep -viE 'aspeed|matrox|cirrus|virtio|qxl|vmware|bochs|red hat|hyper-v' | cut -d: -f3- | sed 's/^ *//' | tr '\n' ';')"
 """
 
 STATUS_SCRIPT = r"""
@@ -59,6 +71,32 @@ echo "mem=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{if(t)printf "%d",(t-a)*
 echo "disk=$(df -P / 2>/dev/null | awk 'NR==2{print $5}' | tr -d '%')"
 echo "uptime=$(awk '{printf "%d", $1}' /proc/uptime 2>/dev/null)"
 echo "cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  echo "gpus=$(nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null | tr '\n' ';')"
+elif command -v npu-smi >/dev/null 2>&1; then
+  echo "npu_raw=$(npu-smi info 2>/dev/null | head -120 | base64 | tr -d '\n')"
+fi
+"""
+
+GPU_LIVE_SCRIPT = r"""
+export LC_ALL=C
+if command -v nvidia-smi >/dev/null 2>&1; then
+  echo "@@VENDOR@@"; echo nvidia
+  echo "@@GPUS@@"
+  nvidia-smi --query-gpu=index,uuid,name,memory.total,memory.used,utilization.gpu,utilization.memory,temperature.gpu,power.draw,power.limit,fan.speed,clocks.sm --format=csv,noheader,nounits 2>&1
+  echo "@@APPS@@"
+  A="$(nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null)"
+  echo "$A"
+  echo "@@PS@@"
+  P="$(echo "$A" | awk -F', ' 'NF>1{print $2}' | sort -u | tr '\n' ',' | sed 's/,$//')"
+  [ -n "$P" ] && ps -o pid=,user=,etime=,args= -p "$P" 2>/dev/null | cut -c1-240
+  echo "@@HEAD@@"
+  nvidia-smi 2>/dev/null | head -4
+elif command -v npu-smi >/dev/null 2>&1; then
+  echo "@@VENDOR@@"; echo ascend
+  echo "@@RAW@@"; npu-smi info 2>&1 | head -150
+fi
+echo "@@END@@"
 """
 
 SITES_SCRIPT = _PRELUDE + r"""
@@ -114,6 +152,7 @@ def parse_facts(text: str) -> dict:
             disks.append({"mount": parts[0], "size": _int(parts[1]), "used": _int(parts[2]),
                           "pct": _int(parts[3].rstrip("%"))})
     facts["disks"] = disks
+    facts.update(parse_gpu_facts(kv))
     vendor, product = (x if x.lower() not in ("none", "default string", "to be filled by o.e.m.") else "" for x in (facts["vendor"], facts["product"]))
     facts["model"] = product if vendor and product.lower().startswith(vendor.lower()) else " ".join(x for x in (vendor, product) if x)
     return facts
@@ -121,8 +160,118 @@ def parse_facts(text: str) -> dict:
 
 def parse_status(text: str) -> dict:
     kv = parse_kv(text)
-    return {"load": kv.get("load", ""), "mem_pct": _int(kv.get("mem")), "disk_pct": _int(kv.get("disk")),
-            "uptime_s": _int(kv.get("uptime")), "cores": _int(kv.get("cores"))}
+    d = {"load": kv.get("load", ""), "mem_pct": _int(kv.get("mem")), "disk_pct": _int(kv.get("disk")),
+         "uptime_s": _int(kv.get("uptime")), "cores": _int(kv.get("cores"))}
+    gpus = []
+    for item in kv.get("gpus", "").split(";"):
+        p = [x.strip() for x in item.split(",")]
+        if len(p) == 4:
+            gpus.append({"util": _int(p[0]), "mem_used": _int(p[1]), "mem_total": _int(p[2]), "temp": _int(p[3])})
+    if kv.get("npu_raw"):
+        gpus = [{"util": n["util"], "mem_used": n["mem_used"], "mem_total": n["mem_total"], "temp": n["temp"]}
+                for n in parse_npu(_b64(kv["npu_raw"]))]
+    if gpus:
+        d["gpus"] = gpus
+    return d
+
+
+# ---------------- 算力 (GPU / NPU) ----------------
+
+def _b64(s):
+    import base64
+    try:
+        return base64.b64decode(s).decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def _float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_npu(text: str) -> list:
+    """解析 npu-smi info 表格(昇腾 910/310),两行一组:芯片名/功耗/温度 + AICore 利用率/HBM。"""
+    npus, cur = [], None
+    for line in text.splitlines():
+        m = re.match(r"\|\s*(\d+)\s+(\S*(?:9[1-9]0|310)\S*)\s*\|\s*(\w+)\s*\|\s*([\d.NA]+)\s+(\d+)", line)
+        if m:
+            cur = {"index": int(m.group(1)), "name": f"Ascend {m.group(2)}", "health": m.group(3),
+                   "power": _float(m.group(4)), "temp": _int(m.group(5)), "util": None, "mem_used": None, "mem_total": None}
+            npus.append(cur)
+            continue
+        m = re.match(r"\|\s*\d+\s*\|\s*[0-9a-fA-F:.]+\s*\|\s*(\d+)\s+.*?(\d+)\s*/\s*(\d+)\s*\|\s*$", line)
+        if m and cur and cur["util"] is None:
+            cur.update(util=_int(m.group(1)), mem_used=_int(m.group(2)), mem_total=_int(m.group(3)))
+    return npus
+
+
+def parse_gpu_facts(kv: dict) -> dict:
+    out = {}
+    vendor = kv.get("gpu_vendor", "")
+    gpus = []
+    if vendor == "nvidia":
+        for item in kv.get("gpus", "").split(";"):
+            p = [x.strip() for x in item.split(",")]
+            if len(p) >= 8:
+                gpus.append({"index": _int(p[0]), "name": p[1], "mem_total": _int(p[2]), "mem_used": _int(p[3]),
+                             "util": _int(p[4]), "temp": _int(p[5]), "power": _float(p[6]), "power_limit": _float(p[7])})
+        out.update(gpu_driver=kv.get("gpu_driver", ""), gpu_cuda=kv.get("gpu_cuda", ""))
+    elif vendor == "ascend":
+        gpus = parse_npu(_b64(kv.get("npu_raw", "")))
+        out["gpu_driver"] = kv.get("gpu_driver", "")
+    pci = [x.strip() for x in kv.get("gpu_pci", "").split(";") if x.strip()]
+    if vendor:
+        out["gpu_vendor"] = vendor
+    if gpus:
+        out["gpus"] = gpus
+        names = {}
+        for g in gpus:
+            names[g["name"]] = names.get(g["name"], 0) + 1
+        out["gpu_summary"] = " + ".join(f"{n}× {k}" for k, n in names.items())
+        out["gpu_mem_total"] = sum(g["mem_total"] or 0 for g in gpus)
+    elif pci:
+        out["gpu_pci"] = pci
+        out["gpu_summary"] = f"{len(pci)}× {pci[0]}(未安装驱动)"
+    return out
+
+
+def parse_gpu_live(text: str) -> dict:
+    sec = _sections(text)
+    vendor = sec.get("vendor", "").strip()
+    if vendor == "ascend":
+        raw = sec.get("raw", "")
+        return {"vendor": "ascend", "gpus": parse_npu(raw), "processes": [], "raw": raw}
+    if vendor != "nvidia":
+        return {"vendor": "", "gpus": [], "processes": []}
+    gpus, uuid_idx = [], {}
+    for line in sec.get("gpus", "").splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) < 12:
+            continue
+        uuid_idx[p[1]] = _int(p[0])
+        gpus.append({"index": _int(p[0]), "uuid": p[1], "name": p[2], "mem_total": _int(p[3]), "mem_used": _int(p[4]),
+                     "util": _int(p[5]), "mem_util": _int(p[6]), "temp": _int(p[7]), "power": _float(p[8]),
+                     "power_limit": _float(p[9]), "fan": _int(p[10]), "clock_sm": _int(p[11])})
+    ps = {}
+    for line in sec.get("ps", "").splitlines():
+        p = line.split(None, 3)
+        if len(p) >= 4:
+            ps[p[0]] = {"user": p[1], "elapsed": p[2], "cmd": p[3]}
+    procs = []
+    for line in sec.get("apps", "").splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) >= 4 and p[1].isdigit():
+            info = ps.get(p[1], {})
+            procs.append({"gpu": uuid_idx.get(p[0]), "pid": int(p[1]), "name": p[2], "mem": _int(p[3]),
+                          "user": info.get("user", ""), "elapsed": info.get("elapsed", ""), "cmd": info.get("cmd", p[2])})
+    head = sec.get("head", "")
+    m = re.search(r"CUDA Version:\s*([0-9.]+)", head)
+    d = re.search(r"Driver Version:\s*([0-9.]+)", head)
+    return {"vendor": "nvidia", "gpus": gpus, "processes": procs,
+            "cuda": m.group(1) if m else "", "driver": d.group(1) if d else ""}
 
 
 # ---------------- 网站 / 端口 ----------------

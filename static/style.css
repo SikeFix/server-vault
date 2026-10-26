@@ -358,3 +358,17 @@ pre.out .err { color: #ff9b9b; }
 .srv-meta span { overflow: hidden; text-overflow: ellipsis; }
 .spec.bt { background: rgba(32, 165, 58, .1); border-color: rgba(32, 165, 58, .28); color: #1a9a35; }
 :root[data-theme="dark"] .spec.bt { color: #4ade80; }
+.srv.compute { background: linear-gradient(180deg, var(--violet-soft), transparent 90px), var(--panel); }
+.srv.compute.st-online::before { background: linear-gradient(90deg, var(--violet), #22d3ee); }
+.spec.gpu { background: var(--violet-soft); border-color: transparent; color: var(--violet); display: inline-flex; align-items: center; gap: 5px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.spec.gpu svg { width: 13px; height: 13px; }
+.gpu-strip { display: flex; flex-direction: column; gap: 7px; }
+.gpu-bars { display: flex; gap: 3px; height: 30px; align-items: flex-end; }
+.gb { flex: 1; height: 100%; background: var(--gray-soft); border-radius: 4px; display: flex; align-items: flex-end; overflow: hidden; max-width: 28px; }
+.gb i { display: block; width: 100%; background: linear-gradient(0deg, var(--violet), #22d3ee); border-radius: 4px; }
+.gb i.warn { background: linear-gradient(0deg, var(--orange), #fbbf24); }
+.gb i.crit { background: linear-gradient(0deg, var(--red), #fb7185); }
+.gpu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.gpu-card { padding: 14px 16px; }
+.gpu-idx { display: inline-grid; place-items: center; min-width: 24px; height: 24px; border-radius: 7px; background: var(--violet-soft); color: var(--violet); font-weight: 700; font-size: 12px; }
+.gpu-idx.sm { min-width: 20px; height: 20px; font-size: 11px; }

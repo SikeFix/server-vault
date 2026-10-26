@@ -1,5 +1,6 @@
 import asyncio
 import codecs
+import hashlib
 import json
 import logging
 import secrets
@@ -11,7 +12,8 @@ from fastapi import APIRouter, Body, Depends, FastAPI, Header, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, btpanel, local_import, mcp, scheduler
+from . import agent, btpanel, keychain, local_import, mcp, quick_add, scheduler
+from .db import db
 from . import services as S
 from .config import AUTO_UNLOCK_PASSWORD, BASE_DIR, STATIC_DIR, VERSION
 from .vault import VaultError, VaultLocked, vault
@@ -24,6 +26,9 @@ log = logging.getLogger("server-vault")
 async def lifespan(app):
     if AUTO_UNLOCK_PASSWORD and vault.initialized:
         log.info("使用 SV_MASTER_PASSWORD 自动解锁: %s", "成功" if vault.unlock(AUTO_UNLOCK_PASSWORD) else "失败")
+    if not vault.unlocked and vault.initialized and db.get_meta("keychain_unlock") == "1":
+        pw = await asyncio.to_thread(keychain.get)
+        log.info("从 macOS 钥匙串自动解锁: %s", "成功" if pw and vault.unlock(pw) else "失败")
     task = asyncio.create_task(scheduler.loop())
     yield
     task.cancel()
@@ -49,22 +54,27 @@ async def _vault_error(request, exc):
 
 # ---------------- 管理端会话 ----------------
 
-_sessions: dict = {}
 _fails: list = []
 
 
+def _hash(tok):
+    return hashlib.sha256(tok.encode()).hexdigest()
+
+
 def _session_ok(tok) -> bool:
-    exp = _sessions.get(tok or "")
-    if not exp or exp < time.time():
-        _sessions.pop(tok or "", None)
+    """会话持久化在数据库中(只存哈希),服务重启后浏览器/菜单栏应用无需重新登录。"""
+    if not tok:
         return False
-    return True
+    r = db.one("SELECT expires FROM sessions WHERE token_hash=?", (_hash(tok),))
+    return bool(r) and r["expires"] > time.time()
 
 
 def _start_session(response: Response):
     tok = secrets.token_urlsafe(32)
-    _sessions[tok] = time.time() + S.get_settings()["session_hours"] * 3600
-    response.set_cookie("sv_session", tok, httponly=True, samesite="strict", max_age=S.get_settings()["session_hours"] * 3600)
+    hours = S.get_settings()["session_hours"]
+    db.run("DELETE FROM sessions WHERE expires<?", (time.time(),))
+    db.run("INSERT INTO sessions(token_hash, expires) VALUES(?,?)", (_hash(tok), time.time() + hours * 3600))
+    response.set_cookie("sv_session", tok, httponly=True, samesite="strict", max_age=hours * 3600)
 
 
 def _throttle():
@@ -84,7 +94,8 @@ def require_admin(request: Request):
 @app.get("/api/state")
 def state(request: Request):
     return {"initialized": vault.initialized, "unlocked": vault.unlocked,
-            "authed": _session_ok(request.cookies.get("sv_session")) and vault.unlocked, "version": VERSION}
+            "authed": _session_ok(request.cookies.get("sv_session")) and vault.unlocked, "version": VERSION,
+            "keychain": {"available": keychain.available(), "enabled": db.get_meta("keychain_unlock") == "1"}}
 
 
 @app.post("/api/init")
@@ -112,7 +123,7 @@ def login(response: Response, payload: dict = Body(...)):
 
 @app.post("/api/logout")
 def logout(request: Request, response: Response):
-    _sessions.pop(request.cookies.get("sv_session", ""), None)
+    db.run("DELETE FROM sessions WHERE token_hash=?", (_hash(request.cookies.get("sv_session", "")),))
     response.delete_cookie("sv_session")
     return {"ok": True}
 
@@ -124,21 +135,64 @@ api = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 def lock(response: Response):
     S.audit("admin", "vault.lock")
     vault.lock()
-    _sessions.clear()
+    db.run("DELETE FROM sessions")
     response.delete_cookie("sv_session")
     return {"ok": True}
+
+
+@api.post("/keychain")
+def set_keychain(payload: dict = Body(...)):
+    if not keychain.available():
+        raise S.ServiceError("仅 macOS 支持钥匙串自动解锁")
+    if payload.get("enable"):
+        if not vault.verify(payload.get("password", "")):
+            raise S.ServiceError("主密码错误", 400)
+        if not keychain.save(payload["password"]):
+            raise S.ServiceError("写入钥匙串失败")
+        db.set_meta("keychain_unlock", "1")
+    else:
+        keychain.delete()
+        db.set_meta("keychain_unlock", "0")
+    S.audit("admin", "vault.keychain", detail="开启" if payload.get("enable") else "关闭")
+    return {"enabled": bool(payload.get("enable"))}
 
 
 @api.post("/change-master")
 def change_master(payload: dict = Body(...)):
     vault.change_password(payload.get("old", ""), payload.get("new", ""))
+    if db.get_meta("keychain_unlock") == "1":
+        keychain.save(payload.get("new", ""))
     S.audit("admin", "vault.change_master")
     return {"ok": True}
 
 
 @api.get("/servers")
-def servers(group: str = None, status: str = None, q: str = None):
-    return [S.public(r) for r in S.list_rows(group=group, status=status, keyword=q)]
+def servers(group: str = None, status: str = None, q: str = None, kind: str = None):
+    S.cleanup_expired()
+    return [S.public(r) for r in S.list_rows(group=group, status=status, keyword=q, kind=kind)]
+
+
+@api.post("/servers/quick")
+def quick(payload: dict = Body(...)):
+    opts = {k: payload.get(k) for k in ("port", "username", "group", "server_type", "temp_days", "install_key", "write_config")
+            if payload.get(k) not in (None, "")}
+    if payload.get("batch"):
+        items = quick_add.parse_batch(payload["batch"], opts)
+
+        def one(item):
+            try:
+                return {"ok": True, "host": item["host"], **quick_add.quick_add(**item)}
+            except Exception as e:
+                return {"ok": False, "host": item["host"], "error": str(e)}
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(items) or 1)) as pool:
+            return list(pool.map(one, items))
+    return quick_add.quick_add(payload.get("host"), payload.get("password"), name=payload.get("name"), **opts)
+
+
+@api.get("/servers/{sid}/gpu")
+def gpu(sid: int):
+    return S.gpu_live(S.get_row(sid))
 
 
 @api.post("/servers")
@@ -373,8 +427,13 @@ def ag_whoami(ctx=Depends(agent_ctx)):
 
 
 @ag.get("/servers")
-def ag_servers(group: str = None, status: str = None, q: str = None, ctx=Depends(agent_ctx)):
-    return agent.list_servers(ctx, group, status, q)
+def ag_servers(group: str = None, status: str = None, q: str = None, kind: str = None, ctx=Depends(agent_ctx)):
+    return agent.list_servers(ctx, group, status, q, kind)
+
+
+@ag.get("/servers/{ref}/gpu")
+def ag_gpu(ref: str, ctx=Depends(agent_ctx)):
+    return agent.gpu_status(ctx, ref)
 
 
 @ag.get("/servers/{ref}")

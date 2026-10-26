@@ -33,6 +33,7 @@ const ICON = {
   activity: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
   globe: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
   shield: svg('<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3z"/>'),
+  chip: svg('<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/>'),
   disk: svg('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
 };
 
@@ -41,7 +42,7 @@ const STATUS = {
   error: ['异常', 'orange'], hostkey_mismatch: ['指纹不符', 'red'], unknown: ['未检测', ''],
 };
 
-const S = { servers: [], selected: new Set(), q: '', group: '', status: '', detail: null, tab: 'overview', agentInfo: null };
+const S = { servers: [], selected: new Set(), q: '', group: '', status: '', kind: '', detail: null, tab: 'overview', agentInfo: null };
 
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch('/api' + path, {
@@ -180,7 +181,7 @@ function renderLock(st) {
     <div class="brand-logo">${ICON.lock}</div>
     <h2>${init ? '创建你的服务器保险库' : '欢迎回来'}</h2>
     <div class="muted small">${init
-      ? '设置主密码(至少 8 位)。所有服务器凭据都用主密码派生的 AES-256 密钥加密,主密码无法找回,请妥善保管。'
+      ? '设置主密码。所有服务器凭据都用主密码派生的 AES-256 密钥加密,主密码无法找回,请妥善保管。'
       : '输入主密码解锁 Server Vault。解锁后 Web 管理端与 Agent 服务即可访问凭据。'}</div>
     <input class="input" type="password" name="pw" placeholder="主密码" autocomplete="current-password" required>
     ${init ? '<input class="input" type="password" name="pw2" placeholder="再次输入主密码" required>' : ''}
@@ -268,7 +269,7 @@ PAGES.servers = async () => {
     <div class="grid c5" id="stats"></div>
     <div class="card" id="toolbarCard" style="margin:16px 0"><div id="toolbar"></div></div>
     <div id="tableWrap"></div>`;
-  $('#addBtn').onclick = () => serverForm();
+  $('#addBtn').onclick = () => quickAddDialog();
   $('#importBtn').onclick = importDialog;
   $('#localBtn').onclick = localImportDialog;
   $('#checkAllBtn').onclick = e => busy(e.currentTarget, async () => {
@@ -295,7 +296,7 @@ function renderStats() {
   const rot = S.servers.filter(s => s.rotation_status === 'failed' || (s.rotation_enabled && s.next_rotation_at && new Date(s.next_rotation_at) < soon)).length;
   const total = S.servers.length, online = c(['online']);
   const items = [
-    ['服务器总数', total, 'indigo', ICON.server, `<div class="ratio"><i style="width:${total ? online / total * 100 : 0}%"></i></div>`, total ? `<small>在线率 ${Math.round(online / total * 100)}%</small>` : ''],
+    ['服务器总数', total, 'indigo', ICON.server, `<div class="ratio"><i style="width:${total ? online / total * 100 : 0}%"></i></div>`, total ? `<small>在线率 ${Math.round(online / total * 100)}%${S.servers.some(x => x.kind === 'compute') ? ` · 算力 ${S.servers.filter(x => x.kind === 'compute').length}` : ''}</small>` : ''],
     ['在线', online, 'green', ICON.check, '', ''],
     ['离线', c(['offline']), 'red', ICON.x, '', ''],
     ['异常', c(['auth_failed', 'error', 'hostkey_mismatch']), 'orange', ICON.alert, '', ''],
@@ -309,7 +310,8 @@ function filtered() {
   const q = S.q.toLowerCase();
   const rank = { online: 0, error: 1, auth_failed: 1, hostkey_mismatch: 1, unknown: 2, offline: 3 };
   return S.servers.filter(s => (!S.group || s.group_name === S.group) && (!S.status || s.status === S.status) &&
-    (!q || [s.name, s.host, s.group_name, s.location, s.provider, s.tags.join(' '), s.facts?.os, s.facts?.model, s.facts?.cloud, geoText(s.facts?.geo)]
+    (!S.kind || (S.kind === 'temp' ? !!s.temp_expires_at : s.kind === S.kind)) &&
+    (!q || [s.name, s.host, s.group_name, s.location, s.provider, s.tags.join(' '), s.facts?.os, s.facts?.model, s.facts?.cloud, s.facts?.gpu_summary, geoText(s.facts?.geo)]
       .join(' ').toLowerCase().includes(q)))
     .sort((x, y) => (rank[x.status] ?? 2) - (rank[y.status] ?? 2) || x.group_name.localeCompare(y.group_name) || x.name.localeCompare(y.name));
 }
@@ -340,12 +342,17 @@ function renderToolbar() {
     <div class="chips"><span class="chip ${!S.group ? 'active' : ''}" data-g="">全部 <span class="n">${S.servers.length}</span></span>
       ${Object.entries(counts).map(([g, k]) => `<span class="chip ${g === S.group ? 'active' : ''}" data-g="${esc(g)}">${esc(g)} <span class="n">${k}</span></span>`).join('')}</div>
     <span class="grow"></span>
+    <div class="seg" id="kindSeg">${[['', '全部类型'], ['normal', '普通'], ['compute', '算力'], ['temp', '临时']].map(([k, l]) => {
+      const n = k === '' ? S.servers.length : k === 'temp' ? S.servers.filter(x => x.temp_expires_at).length : S.servers.filter(x => x.kind === k).length;
+      return `<button data-k="${k}" class="${S.kind === k ? 'active' : ''}">${l}${k ? ` <span class="small muted">${n}</span>` : ''}</button>`;
+    }).join('')}</div>
     <select class="input" id="fStatus"><option value="">全部状态</option>${Object.entries(STATUS).map(([k, [t]]) => `<option value="${k}" ${k === S.status ? 'selected' : ''}>${t}</option>`).join('')}</select>
     <div class="seg"><button data-v="card" class="${S.view === 'card' ? 'active' : ''}">${ICON.grid}卡片</button><button data-v="table" class="${S.view === 'table' ? 'active' : ''}">${ICON.rows}列表</button></div>
     <button class="btn sm ghost" id="reload" title="刷新">${ICON.refresh}</button>`;
   $('#q').oninput = e => { S.q = e.target.value; renderTable(); };
   $$('[data-g]', tb).forEach(c => c.onclick = () => { S.group = c.dataset.g; renderToolbar(); renderTable(); });
   $('#fStatus').onchange = e => { S.status = e.target.value; renderTable(); };
+  $$('[data-k]', tb).forEach(b => b.onclick = () => { S.kind = b.dataset.k; renderToolbar(); renderTable(); });
   $$('[data-v]', tb).forEach(b => b.onclick = () => {
     S.view = b.dataset.v;
     try { localStorage.setItem('sv_view', S.view); } catch { }
@@ -372,7 +379,16 @@ function srvCard(s) {
   const [, color] = STATUS[s.status] || ['', ''];
   const disk = diskTotal(f);
   const rot = s.rotation_status === 'failed' ? '<span class="badge red">轮换失败</span>' : s.rotation_enabled ? `<span class="badge violet" title="下次 ${fmtTime(s.next_rotation_at)}">${ICON.key}${relTime(s.next_rotation_at)}</span>` : '';
-  return `<div class="srv st-${s.status} ${S.selected.has(s.id) ? 'sel' : ''}" data-id="${s.id}">
+  const gl = d.gpus || [];
+  const gpuBlock = s.kind === 'compute' ? `<div class="gpu-strip">
+      <div class="row" style="gap:6px;flex-wrap:nowrap"><span class="spec gpu">${ICON.chip}${esc(f.gpu_summary || '算力服务器')}</span>
+        ${f.gpu_cuda ? `<span class="spec">CUDA ${esc(f.gpu_cuda)}</span>` : ''}</div>
+      ${gl.length ? `<div class="gpu-bars">${gl.map((g, i) => `<div class="gb" title="GPU${i} · 利用率 ${g.util ?? '—'}% · 显存 ${g.mem_used ?? '—'}/${g.mem_total ?? '—'} MiB · ${g.temp ?? '—'}°C">
+        <i style="height:${Math.max(4, g.util || 0)}%" class="${(g.util || 0) >= 90 ? 'crit' : (g.util || 0) >= 60 ? 'warn' : ''}"></i></div>`).join('')}</div>
+        <div class="small muted">GPU 平均利用率 ${Math.round(gl.reduce((a, g) => a + (g.util || 0), 0) / gl.length)}% · 显存 ${fmtBytes(gl.reduce((a, g) => a + (g.mem_used || 0), 0) * 1048576)} / ${fmtBytes(gl.reduce((a, g) => a + (g.mem_total || 0), 0) * 1048576)} · 最高 ${Math.max(...gl.map(g => g.temp || 0))}°C</div>` : ''}
+    </div>` : '';
+  const temp = s.temp_expires_at ? `<span class="badge orange" title="到期 ${fmtTime(s.temp_expires_at)} 自动移除">临时 · ${relTime(s.temp_expires_at)}移除</span>` : '';
+  return `<div class="srv st-${s.status} ${s.kind === 'compute' ? 'compute' : ''} ${S.selected.has(s.id) ? 'sel' : ''}" data-id="${s.id}">
     <div class="srv-top">${osBadge(f.os)}
       <div style="min-width:0;flex:1"><div class="row" style="gap:7px;flex-wrap:nowrap"><span class="dot ${color} ${s.status === 'online' ? 'pulse' : ''}"></span><span class="srv-name">${esc(s.name)}</span></div>
         <div class="srv-host">${esc(s.username)}@${esc(s.host)}${s.port !== 22 ? ':' + s.port : ''}</div></div>
@@ -383,10 +399,11 @@ function srvCard(s) {
     </div>
     ${f.cpu_cores ? `<div class="specs"><span class="spec"><b>${f.cpu_cores}</b> 核</span><span class="spec"><b>${fmtBytes(f.mem_total)}</b> 内存</span>
       ${disk ? `<span class="spec"><b>${fmtBytes(disk)}</b> 磁盘</span>` : ''}${f.bt_installed ? `<span class="spec bt">宝塔 <b>${esc(f.bt_version || '')}</b></span>` : ''}${s.proxy_command ? '<span class="spec">经代理</span>' : ''}</div>` : ''}
+    ${gpuBlock}
     ${d.mem_pct != null || d.disk_pct != null
       ? `<div class="meters"><span>内存</span>${meterBar(d.mem_pct)}<span>${d.mem_pct ?? '—'}%</span><span>磁盘</span>${meterBar(d.disk_pct)}<span>${d.disk_pct ?? '—'}%</span></div>`
       : d.error ? `<div class="small" style="color:var(--${color || 'muted'});overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.error)}">${esc(d.error)}</div>` : ''}
-    <div class="srv-foot"><span class="badge">${esc(s.group_name)}</span>${d.load ? `<span title="负载">${ICON.activity}${esc(d.load.split(' ')[0])}</span>` : ''}${rot}
+    <div class="srv-foot"><span class="badge">${esc(s.group_name)}</span>${temp}${d.load ? `<span title="负载">${ICON.activity}${esc(d.load.split(' ')[0])}</span>` : ''}${rot}
       <span class="grow"></span>${s.latency_ms != null ? `<span>${s.latency_ms} ms</span>` : ''}
       <button class="btn sm" data-term data-stop>${ICON.terminal}终端</button></div>
   </div>`;
@@ -420,10 +437,10 @@ function renderTable() {
       return `<tr data-id="${s.id}" class="${S.selected.has(s.id) ? 'sel' : ''}">
         <td data-stop><input type="checkbox" class="sel" ${S.selected.has(s.id) ? 'checked' : ''}></td>
         <td>${statusBadge(s.status)}<div class="sub">${s.latency_ms != null ? s.latency_ms + ' ms' : ''}</div></td>
-        <td><div class="row" style="flex-wrap:nowrap">${osBadge(f.os)}<div><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.group_name)}${s.tags.map(t => ` · ${esc(t)}`).join('')}</div></div></div></td>
+        <td><div class="row" style="flex-wrap:nowrap">${osBadge(f.os)}<div><div class="name">${esc(s.name)}</div><div class="sub">${s.kind === 'compute' ? '<span style="color:var(--violet)">算力</span> · ' : ''}${s.temp_expires_at ? '<span style="color:var(--orange)">临时</span> · ' : ''}${esc(s.group_name)}${s.tags.map(t => ` · ${esc(t)}`).join('')}</div></div></div></td>
         <td class="mono">${esc(s.username)}@${esc(s.host)}${s.port !== 22 ? ':' + s.port : ''}</td>
         <td>${esc(locText(s) || '—')}<div class="sub">${esc(provText(s))}</div></td>
-        <td class="clip">${esc(f.os || '—')}<div class="sub">${f.bt_installed ? `宝塔 ${esc(f.bt_version || '')} · ` : ''}${esc(f.model || f.virt || '')}</div></td>
+        <td class="clip">${esc(f.os || '—')}<div class="sub">${f.gpu_summary ? `${esc(f.gpu_summary)} · ` : ''}${f.bt_installed ? `宝塔 ${esc(f.bt_version || '')} · ` : ''}${esc(f.model || f.virt || '')}</div></td>
         <td>${f.cpu_cores ? f.cpu_cores + ' 核' : '—'} / ${f.mem_total ? fmtBytes(f.mem_total) : '—'}<div class="sub">${disk ? '磁盘 ' + fmtBytes(disk) : ''}</div></td>
         <td>${esc(d.load || '—')}<div class="sub clip" title="${esc(d.error || '')}">${d.mem_pct != null ? `内存 ${d.mem_pct}% · 磁盘 ${d.disk_pct ?? '—'}%` : esc(d.error || '')}</div></td>
         <td>${rotationCell(s)}</td>
@@ -609,6 +626,14 @@ async function serverForm(s = null) {
       <div class="section-title">密码自动轮换</div>
       <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="rotation_enabled" ${s?.rotation_enabled ? 'checked' : ''}>开启定期自动轮换</label></div>
       <div class="field"><label>轮换周期(天)</label><input class="input" name="rotation_days" type="number" min="1" value="${v('rotation_days', 30)}"></div>
+      <div class="section-title">类型与期限</div>
+      <div class="field"><label>服务器类型</label><select class="input" name="server_type">
+        <option value="auto">自动识别(检测到 GPU/NPU 即为算力)</option><option value="normal" ${s?.server_type === 'normal' ? 'selected' : ''}>普通服务器</option>
+        <option value="compute" ${s?.server_type === 'compute' ? 'selected' : ''}>算力服务器</option></select></div>
+      <div class="field"><label>保留期限</label><select class="input" name="retention">
+        ${s?.temp_expires_at ? `<option value="keep">保持当前(${fmtTime(s.temp_expires_at)} 移除)</option>` : ''}
+        <option value="" ${s?.temp_expires_at ? '' : 'selected'}>永久</option>
+        ${[1, 3, 7, 30].map(d => `<option value="${d}">临时:${d} 天后自动移除</option>`).join('')}</select></div>
       <div class="field full"><label>自动轮换对象</label><select class="input" name="rotation_target">
         <option value="password">登录密码</option><option value="key" ${s?.rotation_target === 'key' ? 'selected' : ''}>SSH 密钥(适合只用密钥登录的账号)</option></select></div>
     </form>`,
@@ -626,6 +651,8 @@ async function serverForm(s = null) {
     data.use_sudo = f.use_sudo.checked;
     data.rotation_enabled = f.rotation_enabled.checked;
     data.port = +data.port; data.rotation_days = +data.rotation_days;
+    if (data.retention !== 'keep') data.temp_expires_at = data.retention ? new Date(Date.now() + data.retention * 86400e3).toISOString() : null;
+    delete data.retention;
     const saved = s ? await api('/servers/' + s.id, { method: 'PUT', body: data }) : await api('/servers', { method: 'POST', body: data });
     m.close();
     toast(s ? '已保存' : '已添加,正在检测连通性…', 'ok');
@@ -636,7 +663,7 @@ async function serverForm(s = null) {
 }
 
 /* ================= 服务器详情 ================= */
-function closeDrawer() { $$('.drawer, .drawer-mask').forEach(e => e.remove()); S.detail = null; }
+function closeDrawer() { clearInterval(S.gpuTimer); $$('.drawer, .drawer-mask').forEach(e => e.remove()); S.detail = null; }
 
 async function openDetail(id, tab = 'overview') {
   closeDrawer();
@@ -659,14 +686,15 @@ async function renderDetail() {
   try { s = await api('/servers/' + S.detail); } catch (e) { toast(e.message, 'error'); return closeDrawer(); }
   const i = S.servers.findIndex(x => x.id === s.id);
   if (i >= 0) S.servers[i] = s;
-  const TABS = [['overview', '概览'], ['sites', '网站与端口'], ['bt', '宝塔面板'], ['creds', '凭据与轮换'], ['exec', '执行命令'], ['logs', '操作日志']];
+  const TABS = [['overview', '概览'], ...(s.kind === 'compute' ? [['gpu', '算力']] : []), ['sites', '网站与端口'], ['bt', '宝塔面板'], ['creds', '凭据与轮换'], ['exec', '执行命令'], ['logs', '操作日志']];
+  if (S.tab === 'gpu' && s.kind !== 'compute') S.tab = 'overview';
   const f = s.facts || {};
   d.innerHTML = `<div class="drawer-head">
       <div class="drawer-title">${osBadge(f.os)}
         <div class="grow" style="min-width:0"><div class="row"><h2>${esc(s.name)}</h2>${statusBadge(s.status)}
           ${s.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('')}</div>
           <div class="muted small" style="margin-top:3px"><span class="mono">${esc(s.username)}@${esc(s.host)}:${s.port}</span> · ${esc(s.group_name)}
-            ${locText(s) ? ` · ${esc(locText(s))}` : ''}${provText(s) ? ` · ${esc(provText(s))}` : ''}${s.proxy_command ? ' · 经代理连接' : ''}</div></div>
+            ${locText(s) ? ` · ${esc(locText(s))}` : ''}${provText(s) ? ` · ${esc(provText(s))}` : ''}${s.proxy_command ? ' · 经代理连接' : ''}${s.kind === 'compute' ? ' · <span style="color:var(--violet)">算力服务器</span>' : ''}${s.temp_expires_at ? ` · <span style="color:var(--orange)">临时,${relTime(s.temp_expires_at)}自动移除</span>` : ''}</div></div>
         <button class="btn sm primary" id="dTerm">${ICON.terminal}打开终端</button>
         <button class="btn sm" id="dCheck">${ICON.refresh}检测</button>
         <button class="btn sm" id="dEdit">编辑</button>
@@ -694,7 +722,8 @@ async function renderDetail() {
 
 function renderTab(s) {
   const body = $('#dbody');
-  ({ overview: tabOverview, sites: tabSites, bt: tabBt, creds: tabCreds, exec: tabExec, logs: tabLogs })[S.tab](s, body);
+  clearInterval(S.gpuTimer);
+  ({ overview: tabOverview, gpu: tabGpu, sites: tabSites, bt: tabBt, creds: tabCreds, exec: tabExec, logs: tabLogs })[S.tab](s, body);
 }
 
 const kv = pairs => `<dl class="kv">${pairs.filter(p => p).map(([k, v]) => `<dt>${k}</dt><dd>${v === '' || v == null ? '<span class="muted">—</span>' : v}</dd>`).join('')}</dl>`;
@@ -809,6 +838,137 @@ async function tabSites(s, body) {
     await api(`/servers/${s.id}/sites`, { method: 'POST' });
     toast('扫描完成', 'ok');
     if (S.tab === 'sites') tabSites(s, body);
+  });
+}
+
+async function tabGpu(s, body) {
+  const f = s.facts || {};
+  body.innerHTML = '<div class="empty">正在查询 GPU…</div>';
+  const draw = async () => {
+    let g;
+    try { g = await api(`/servers/${s.id}/gpu`); }
+    catch (e) {
+      clearInterval(S.gpuTimer);
+      body.innerHTML = `<div class="card empty">${ICON.chip}${esc(e.message)}${f.gpu_pci ? `<div class="small" style="margin-top:8px">PCI 设备:${esc(f.gpu_pci.join(';'))}</div>` : ''}</div>`;
+      return;
+    }
+    if (S.tab !== 'gpu' || !$('#dbody')) return clearInterval(S.gpuTimer);
+    const gs = g.gpus, avg = gs.length ? Math.round(gs.reduce((a, x) => a + (x.util || 0), 0) / gs.length) : 0;
+    const memU = gs.reduce((a, x) => a + (x.mem_used || 0), 0), memT = gs.reduce((a, x) => a + (x.mem_total || 0), 0);
+    const metric = (l, v) => `<div class="metric"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+    const auto = $('#gpuAuto', body)?.checked ?? true;
+    body.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><span class="muted small">${g.vendor === 'ascend' ? '昇腾 NPU' : 'NVIDIA'} · 驱动 ${esc(g.driver || f.gpu_driver || '—')}${g.cuda ? ` · CUDA ${esc(g.cuda)}` : ''} · 查询于 ${fmtTime(g.queried_at)}</span>
+        <span class="grow"></span><label class="check small"><input type="checkbox" id="gpuAuto" ${auto ? 'checked' : ''}>每 5 秒自动刷新</label>
+        <button class="btn sm" id="gpuRefresh">${ICON.refresh}刷新</button></div>
+      <div class="hero-metrics">
+        ${metric('加速卡', `${gs.length} <span class="small muted">张</span>`)}
+        ${metric('平均利用率', `${avg}%${meterBar(avg)}`)}
+        ${metric('显存', `${fmtBytes(memU * 1048576)} <span class="small muted">/ ${fmtBytes(memT * 1048576)}</span>${meterBar(memT ? Math.round(memU / memT * 100) : 0)}`)}
+        ${metric('占用进程', `${g.processes.length}`)}
+      </div>
+      <div class="gpu-grid">${gs.map(x => {
+        const mp = x.mem_total ? Math.round((x.mem_used || 0) / x.mem_total * 100) : null;
+        return `<div class="card gpu-card">
+          <div class="row" style="flex-wrap:nowrap"><span class="gpu-idx">${x.index}</span><b class="grow" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.name)}">${esc(x.name)}</b>
+            ${x.health && x.health !== 'OK' ? `<span class="badge red">${esc(x.health)}</span>` : ''}
+            <span class="badge ${(x.temp || 0) >= 85 ? 'red' : (x.temp || 0) >= 75 ? 'orange' : ''}">${x.temp ?? '—'}°C</span></div>
+          <div class="meters" style="grid-template-columns:44px 1fr 74px;margin-top:10px">
+            <span>利用率</span>${meterBar(x.util)}<span>${x.util ?? '—'}%</span>
+            <span>显存</span>${meterBar(mp)}<span>${x.mem_used != null ? `${(x.mem_used / 1024).toFixed(1)}/${(x.mem_total / 1024).toFixed(0)}G` : '—'}</span>
+          </div>
+          <div class="small muted" style="margin-top:8px">${x.power != null ? `功耗 ${x.power}${x.power_limit ? ` / ${x.power_limit}` : ''} W` : ''}${x.fan != null ? ` · 风扇 ${x.fan}%` : ''}${x.clock_sm ? ` · ${x.clock_sm} MHz` : ''}</div>
+        </div>`;
+      }).join('')}</div>
+      <div class="card" style="margin-top:16px"><div class="toolbar"><b>GPU 占用进程</b><span class="muted small">谁在用卡、用了多少显存</span></div>
+        ${g.processes.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>GPU</th><th>用户</th><th>PID</th><th>显存</th><th>运行时长</th><th>命令</th><th></th></tr></thead><tbody>
+          ${g.processes.sort((a, b) => (b.mem || 0) - (a.mem || 0)).map(p => `<tr style="cursor:default"><td><span class="gpu-idx sm">${p.gpu ?? '?'}</span></td><td><b>${esc(p.user || '—')}</b></td>
+            <td class="mono">${p.pid}</td><td>${p.mem != null ? fmtBytes(p.mem * 1048576) : '—'}</td><td class="mono small">${esc(p.elapsed || '')}</td>
+            <td class="mono small clip" style="max-width:420px" title="${esc(p.cmd)}">${esc(p.cmd)}</td>
+            <td><button class="btn sm danger" data-kill="${p.pid}">结束</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty" style="padding:28px">当前没有进程占用 GPU</div>'}</div>
+      ${g.raw ? `<details style="margin-top:14px"><summary class="muted small">npu-smi 原始输出</summary><pre class="out">${esc(g.raw)}</pre></details>` : ''}`;
+    $('#gpuRefresh', body).onclick = e => busy(e.currentTarget, draw);
+    $('#gpuAuto', body).onchange = e => { clearInterval(S.gpuTimer); if (e.target.checked) S.gpuTimer = setInterval(draw, 5000); };
+    $$('[data-kill]', body).forEach(b => b.onclick = async () => {
+      if (!await confirmBox(`结束进程 ${b.dataset.kill}?将先发送 SIGTERM。`, { ok: '结束进程', danger: true })) return;
+      busy(b, async () => {
+        const r = await api(`/servers/${s.id}/exec`, { method: 'POST', body: { command: `kill ${+b.dataset.kill}`, sudo: s.username !== 'root' } });
+        toast(r.exit_code === 0 ? '已发送结束信号' : (r.stderr || '结束失败'), r.exit_code === 0 ? 'ok' : 'error');
+        setTimeout(draw, 1500);
+      });
+    });
+  };
+  await draw();
+  clearInterval(S.gpuTimer);
+  if ($('#gpuAuto', body)?.checked) S.gpuTimer = setInterval(draw, 5000);
+}
+
+function quickAddDialog() {
+  const groups = [...new Set(S.servers.map(x => x.group_name))];
+  const m = modal({
+    title: '快速添加服务器', wide: true,
+    body: `<div class="seg" id="qaMode" style="margin-bottom:16px"><button data-m="one" class="active">单台</button><button data-m="batch">批量粘贴</button></div>
+      <form class="form" id="qaf" autocomplete="off">
+        <div class="field qa-one"><label>IP / 域名 *</label><input class="input mono" name="host" placeholder="1.2.3.4" autofocus></div>
+        <div class="field qa-one"><label>root 密码 *</label><input class="input mono" name="password" type="password" autocomplete="new-password"></div>
+        <div class="field full qa-batch hidden"><label>每行一台:IP 密码 [端口] [用户名]</label>
+          <textarea class="input mono" name="batch" rows="6" placeholder="1.2.3.4 Passw0rd!\n5.6.7.8 Another#Pwd 2222\n9.9.9.9 Pwd123 22 ubuntu"></textarea></div>
+        <div class="field"><label>保留期限</label><select class="input" name="temp_days"><option value="">永久服务器</option>
+          ${[1, 3, 7, 30].map(d => `<option value="${d}">临时:${d} 天后自动移除</option>`).join('')}</select></div>
+        <div class="field"><label>服务器类型</label><select class="input" name="server_type"><option value="auto">自动识别(有 GPU 即为算力)</option>
+          <option value="normal">普通服务器</option><option value="compute">算力服务器</option></select></div>
+        <div class="field full"><label class="check"><input type="checkbox" name="install_key" checked>安装本机 SSH 公钥(之后免密登录)</label>
+          <label class="check" style="margin-left:18px"><input type="checkbox" name="write_config" checked>写入 ~/.ssh/config 与 known_hosts(终端可直接 ssh 名称)</label></div>
+        <details class="full"><summary class="muted small" style="cursor:pointer">更多选项(名称 / 端口 / 用户名 / 分组,默认自动)</summary>
+          <div class="form" style="margin-top:12px">
+            <div class="field qa-one"><label>名称(默认用服务器主机名)</label><input class="input" name="name"></div>
+            <div class="field"><label>端口</label><input class="input" name="port" type="number" value="22"></div>
+            <div class="field"><label>用户名</label><input class="input" name="username" value="root"></div>
+            <div class="field"><label>分组(临时默认「临时」)</label><input class="input" name="group" list="qaGroups"><datalist id="qaGroups">${groups.map(g => `<option value="${esc(g)}">`).join('')}</datalist></div>
+          </div></details>
+      </form>
+      <div id="qaRes" class="list-gap" style="margin-top:16px"></div>`,
+    foot: '<button class="btn ghost" id="qaFull">完整表单…</button><span class="grow"></span><button class="btn" id="qaCancel">取消</button><button class="btn primary" id="qaGo">添加并检测</button>',
+  });
+  const f = $('#qaf', m);
+  let mode = 'one';
+  $$('[data-m]', m).forEach(b => b.onclick = () => {
+    mode = b.dataset.m;
+    $$('[data-m]', m).forEach(x => x.classList.toggle('active', x === b));
+    $$('.qa-one', m).forEach(x => x.classList.toggle('hidden', mode !== 'one'));
+    $$('.qa-batch', m).forEach(x => x.classList.toggle('hidden', mode !== 'batch'));
+  });
+  $('#qaCancel', m).onclick = m.close;
+  $('#qaFull', m).onclick = () => { m.close(); serverForm(); };
+  const stepList = steps => steps.map(t => `<div class="small" style="margin-top:3px">✓ ${esc(t)}</div>`).join('');
+  $('#qaGo', m).onclick = e => busy(e.currentTarget, async () => {
+    const body = {
+      temp_days: f.temp_days.value ? +f.temp_days.value : null, server_type: f.server_type.value,
+      install_key: f.install_key.checked, write_config: f.write_config.checked,
+      port: +f.port.value || 22, username: f.username.value || 'root', group: f.group.value || null,
+    };
+    if (mode === 'one') {
+      if (!f.host.value || !f.password.value) return toast('请填写 IP 和密码', 'error');
+      Object.assign(body, { host: f.host.value, password: f.password.value, name: f.name.value || null });
+      $('#qaRes', m).innerHTML = '<div class="muted small">正在连接、安装公钥、检测并采集配置…</div>';
+      try {
+        const r = await api('/servers/quick', { method: 'POST', body });
+        $('#qaRes', m).innerHTML = `<div class="card card-pad"><div class="row"><span class="badge green">已添加</span><b>${esc(r.server.name)}</b>${statusBadge(r.server.status)}
+          <span class="grow"></span><button class="btn sm" id="qaOpen">查看详情</button></div>${stepList(r.steps)}</div>`;
+        $('#qaOpen', m).onclick = () => { m.close(); openDetail(r.server.id); };
+        f.host.value = ''; f.password.value = ''; f.name.value = '';
+      } catch (err) { $('#qaRes', m).innerHTML = `<div class="badge red">失败</div> <span class="small">${esc(err.message)}</span>`; }
+    } else {
+      if (!f.batch.value.trim()) return toast('请粘贴服务器列表', 'error');
+      body.batch = f.batch.value;
+      $('#qaRes', m).innerHTML = '<div class="muted small">正在并发添加…</div>';
+      const res = await api('/servers/quick', { method: 'POST', body });
+      $('#qaRes', m).innerHTML = res.map(r => `<details class="result-item" ${r.ok ? '' : 'open'}><summary>
+        <span class="badge ${r.ok ? 'green' : 'red'}">${r.ok ? '成功' : '失败'}</span><b>${esc(r.ok ? r.server.name : r.host)}</b>
+        <span class="muted small">${esc(r.ok ? r.host : r.error)}</span></summary>${r.ok ? `<div style="padding:8px 14px">${stepList(r.steps)}</div>` : ''}</details>`).join('');
+    }
+    loadServers();
   });
 }
 
@@ -1251,9 +1411,10 @@ PAGES.settings = async () => {
       <div>
         <div class="card card-pad"><h3>修改主密码</h3><form class="form" id="mpf">
           <div class="field full"><label>当前主密码</label><input class="input" type="password" name="old" required></div>
-          <div class="field"><label>新主密码</label><input class="input" type="password" name="new" required minlength="8"></div>
+          <div class="field"><label>新主密码</label><input class="input" type="password" name="new" required></div>
           <div class="field"><label>确认新主密码</label><input class="input" type="password" name="new2" required></div>
           <div class="full"><button class="btn" id="saveMp">修改主密码</button><div class="hint">将使用新密钥重新加密全部凭据</div></div></form></div>
+        <div class="card card-pad" style="margin-top:14px" id="kcCard"></div>
         <div class="card card-pad" style="margin-top:14px"><h3>安全说明</h3><div class="small muted" style="line-height:1.8">
           · 凭据以 AES-256-GCM 加密存储,密钥由主密码经 scrypt 派生,仅保存在内存中<br>
           · 服务默认只监听 127.0.0.1;如需局域网访问请放在 HTTPS 反向代理之后<br>
@@ -1261,6 +1422,19 @@ PAGES.settings = async () => {
           · 密码轮换采用「预写」机制:新密码先加密落库再修改服务器,中断也不会丢失<br>
           · 无人值守可设置环境变量 SV_MASTER_PASSWORD 在启动时自动解锁(会降低安全性)</div></div>
       </div></div>`;
+  const kc = (await api('/state')).keychain;
+  const drawKc = enabled => {
+    $('#kcCard').innerHTML = `<h3>启动时自动解锁 ${enabled ? '<span class="badge green">已开启</span>' : '<span class="badge">未开启</span>'}</h3>
+      <div class="small muted" style="line-height:1.7;margin-bottom:12px">${kc.available
+        ? '把主密码保存到 macOS 钥匙串,服务或菜单栏应用启动时自动解锁。<b>开启后,即使电脑重启,定时密码轮换、状态检测也不会因为保险库锁定而中断。</b>'
+        : '仅 macOS 支持。其他系统可用环境变量 SV_MASTER_PASSWORD 实现自动解锁。'}</div>
+      ${kc.available ? (enabled ? '<button class="btn danger" id="kcOff">关闭并从钥匙串删除</button>'
+        : '<div class="row" style="flex-wrap:nowrap"><input class="input" type="password" id="kcPw" placeholder="输入当前主密码"><button class="btn primary" id="kcOn">开启</button></div>') : ''}`;
+    const on = $('#kcOn'), off = $('#kcOff');
+    if (on) on.onclick = e => busy(e.currentTarget, async () => { await api('/keychain', { method: 'POST', body: { enable: true, password: $('#kcPw').value } }); toast('已开启自动解锁', 'ok'); drawKc(true); });
+    if (off) off.onclick = e => busy(e.currentTarget, async () => { await api('/keychain', { method: 'POST', body: { enable: false } }); toast('已关闭', 'ok'); drawKc(false); });
+  };
+  drawKc(kc.enabled);
   $('#saveSt').onclick = e => { e.preventDefault(); busy(e.currentTarget, async () => {
     const f = $('#stf');
     const body = Object.fromEntries([...new FormData(f)].map(([k, v]) => [k, k === 'agent_deny_patterns' ? v : +v]));

@@ -10,6 +10,6 @@ if ! .venv/bin/python -c "import fastapi, paramiko, cryptography, uvicorn" 2>/de
   else .venv/bin/pip install -q -r requirements.txt; fi
 fi
 HOST="${SV_HOST:-127.0.0.1}"
-PORT="${SV_PORT:-8765}"
+PORT="${SV_PORT:-8780}"
 echo "Server Vault → http://${HOST}:${PORT}"
 exec .venv/bin/python -m uvicorn app.main:app --host "$HOST" --port "$PORT"

@@ -18,7 +18,7 @@ import paramiko
 
 HERE = Path(__file__).resolve().parent
 FAKE_BIN = HERE / "fakebin"
-USERS = {"root": "InitPass#123", "deploy": "DeployPass#1", "dev": "DevPass#1", "ops": "OpsPass#1", "keyuser": "KeyUser#1"}
+USERS = {"root": "InitPass#123", "deploy": "DeployPass#1", "dev": "DevPass#1", "ops": "OpsPass#1", "keyuser": "KeyUser#1", "gpu": "GpuPass#1"}
 SUDOERS = {"root", "deploy"}          # sudo 需要密码
 NOPASSWD = {"ops"}                    # 免密 sudo
 LOCK = threading.Lock()
@@ -119,6 +119,8 @@ def apply_chpasswd(lines):
 def env(user="root"):
     e = dict(os.environ)
     e["PATH"] = f"{FAKE_BIN}:{e['PATH']}"
+    if user == "gpu":  # 模拟算力服务器:只有 gpu 用户能看到 nvidia-smi
+        e["PATH"] = f"{HERE / 'fakegpu'}:{e['PATH']}"
     e["HOME"] = str(home(user))
     e["BT_PANEL"] = str(BT_DIR)
     return e

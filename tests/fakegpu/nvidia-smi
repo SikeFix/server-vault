@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""测试用 nvidia-smi 替身:两张 A100,一个占用进程(pid 1)。"""
+import sys
+
+a = " ".join(sys.argv[1:])
+G = [("0", "GPU-aaaa", "NVIDIA A100-SXM4-80GB", 81920, 40960, 87, 50, 71, 310.5, 400.0, 45, 1410),
+     ("1", "GPU-bbbb", "NVIDIA A100-SXM4-80GB", 81920, 1024, 3, 1, 38, 62.0, 400.0, 30, 210)]
+if "--query-compute-apps" in a:
+    print("GPU-aaaa, 1, python, 39936")
+elif "--query-gpu=driver_version" in a:
+    for _ in G:
+        print("550.54.15")
+elif "--query-gpu=index,name,memory.total" in a:
+    for g in G:
+        print(f"{g[0]}, {g[2]}, {g[3]}, {g[4]}, {g[5]}, {g[7]}, {g[8]}, {g[9]}")
+elif "--query-gpu=utilization.gpu,memory.used" in a:
+    for g in G:
+        print(f"{g[5]}, {g[4]}, {g[3]}, {g[7]}")
+elif "--query-gpu=index,uuid" in a:
+    for g in G:
+        print(", ".join(str(x) for x in g))
+else:
+    print("Sun Oct 26 10:00:00 2026")
+    print("+-----------------------------------------------------------------------------------------+")
+    print("| NVIDIA-SMI 550.54.15            Driver Version: 550.54.15      CUDA Version: 12.4     |")
+    print("|-----------------------------------------+------------------------+----------------------+")

@@ -17,7 +17,7 @@ from . import services as S
 from . import ssh
 from .db import db
 
-SSH_DIR = Path(os.path.expanduser("~/.ssh"))
+SSH_DIR = Path(os.environ.get("SV_SSH_DIR") or os.path.expanduser("~/.ssh"))
 KEY_PREF = ["ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "rsa-sha2-512", "ssh-rsa"]
 
 
@@ -157,3 +157,82 @@ def import_aliases(selected, actor="admin") -> dict:
             errors.append(f"{alias}: {e}")
     S.audit(actor, "server.import_local", detail=f"导入 {len(created)} 台,跳过 {len(skipped)} 台")
     return {"created": created, "skipped": skipped, "errors": errors}
+
+
+# ---------------- 写回本机 SSH 配置(快速添加使用) ----------------
+
+def _marker(name):
+    return f"# >>> server-vault: {name} >>>", f"# <<< server-vault: {name} <<<"
+
+
+def local_keypair():
+    """本机可用于登录的密钥对(优先 ed25519),返回 (私钥文本, 公钥行, 私钥路径) 或 None。"""
+    for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
+        priv, pub = SSH_DIR / name, SSH_DIR / f"{name}.pub"
+        if priv.is_file() and pub.is_file():
+            text, _ = _load_key(priv)
+            if text:
+                return text, pub.read_text().strip(), str(priv)
+    return None
+
+
+def _backup_config(cfg):
+    if cfg.exists():
+        bak = cfg.with_name("config.bak-server-vault")
+        if not bak.exists():
+            bak.write_text(cfg.read_text())
+
+
+def add_config_block(name, alias, host, port, user, identity):
+    SSH_DIR.mkdir(mode=0o700, exist_ok=True)
+    cfg = SSH_DIR / "config"
+    _backup_config(cfg)
+    remove_config_block(name)
+    begin, end = _marker(name)
+    home = os.path.expanduser("~")
+    ident = identity.replace(home, "~", 1) if identity and identity.startswith(home) else identity
+    lines = [begin, f"Host {alias}", f"  HostName {host}", f"  User {user}"]
+    if int(port) != 22:
+        lines.append(f"  Port {port}")
+    if ident:
+        lines.append(f"  IdentityFile {ident}")
+    lines.append(end)
+    old = cfg.read_text() if cfg.exists() else ""
+    cfg.write_text(old.rstrip("\n") + ("\n\n" if old.strip() else "") + "\n".join(lines) + "\n")
+    os.chmod(cfg, 0o600)
+
+
+def remove_config_block(name):
+    cfg = SSH_DIR / "config"
+    if not cfg.exists():
+        return False
+    begin, end = _marker(name)
+    text = cfg.read_text()
+    if begin not in text:
+        return False
+    out, skip = [], False
+    for line in text.splitlines():
+        if line.strip() == begin:
+            skip = True
+            continue
+        if skip and line.strip() == end:
+            skip = False
+            continue
+        if not skip:
+            out.append(line)
+    cfg.write_text("\n".join(out).rstrip("\n") + "\n")
+    return True
+
+
+def add_known_host(host, port, host_key):
+    if not host_key or _known_host(host, port)[0]:
+        return
+    kh = SSH_DIR / "known_hosts"
+    name = host if int(port) == 22 else f"[{host}]:{port}"
+    with open(kh, "a") as f:
+        f.write(f"{name} {host_key}\n")
+    os.chmod(kh, 0o600)
+
+
+def config_aliases():
+    return set(aliases()) if (SSH_DIR / "config").exists() else set()

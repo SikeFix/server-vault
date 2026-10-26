@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS audit_logs(
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_audit_server ON audit_logs(server_id);
+
+CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires REAL NOT NULL);
 """
 
 
@@ -115,7 +117,8 @@ class DB:
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(servers)")}
         for col, ddl in (("proxy_command", "TEXT NOT NULL DEFAULT ''"), ("source", "TEXT NOT NULL DEFAULT ''"),
                          ("pending_key_enc", "TEXT"), ("rotation_target", "TEXT NOT NULL DEFAULT 'password'"),
-                         ("bt_username", "TEXT"), ("bt_password_enc", "TEXT"), ("bt_updated_at", "TEXT")):
+                         ("bt_username", "TEXT"), ("bt_password_enc", "TEXT"), ("bt_updated_at", "TEXT"),
+                         ("server_type", "TEXT NOT NULL DEFAULT 'auto'"), ("temp_expires_at", "TEXT")):
             if col not in cols:
                 self.conn.execute(f"ALTER TABLE servers ADD COLUMN {col} {ddl}")
 

@@ -2,7 +2,7 @@
 """stdio ↔ HTTP 的 MCP 桥接,供只支持 stdio 的 Agent 客户端(Claude Desktop、部分 IDE)使用。
 
 仅依赖标准库。环境变量:
-  SV_URL    Server Vault 地址,默认 http://127.0.0.1:8765
+  SV_URL    Server Vault 地址,默认 http://127.0.0.1:8780
   SV_TOKEN  Agent Token(在 Web 界面「Agent 接入」创建)
 """
 import json
@@ -11,7 +11,7 @@ import sys
 import urllib.error
 import urllib.request
 
-URL = os.environ.get("SV_URL", "http://127.0.0.1:8765").rstrip("/") + "/mcp"
+URL = os.environ.get("SV_URL", "http://127.0.0.1:8780").rstrip("/") + "/mcp"
 TOKEN = os.environ.get("SV_TOKEN", "")
 
 

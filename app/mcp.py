@@ -24,7 +24,10 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "group": {"type": "string", "description": "按分组过滤"},
          "status": {"type": "string", "enum": ["online", "offline", "auth_failed", "error", "unknown", "hostkey_mismatch"]},
-         "keyword": {"type": "string", "description": "按名称/主机/标签/位置模糊搜索"}}}},
+         "keyword": {"type": "string", "description": "按名称/主机/标签/位置模糊搜索"},
+         "kind": {"type": "string", "enum": ["normal", "compute"], "description": "normal 普通服务器 / compute 算力(GPU/NPU)服务器"}}}},
+    {"name": "get_gpu_status", "scope": "read", "description": "实时查询算力服务器的 GPU/NPU:型号、利用率、显存、温度、功耗、占用进程(用户/PID/命令)",
+     "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
     {"name": "get_server", "scope": "read", "description": "获取单台服务器详细信息(含硬件配置、状态、轮换计划,不含密码)",
      "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
     {"name": "check_status", "scope": "read", "description": "批量实时检测服务器状态(端口连通、SSH 登录、负载、内存、磁盘)",
@@ -63,7 +66,9 @@ def _call(ctx, name, a):
     if name == "whoami":
         return agent.whoami(ctx)
     if name == "list_servers":
-        return agent.list_servers(ctx, a.get("group"), a.get("status"), a.get("keyword"))
+        return agent.list_servers(ctx, a.get("group"), a.get("status"), a.get("keyword"), a.get("kind"))
+    if name == "get_gpu_status":
+        return agent.gpu_status(ctx, a["server"])
     if name == "get_server":
         return agent.get_server(ctx, a["server"])
     if name == "check_status":

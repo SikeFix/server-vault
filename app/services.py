@@ -120,6 +120,14 @@ def list_audit(limit=100, offset=0, server_id=None, actor=None, action=None):
 
 # ---------------- 服务器 ----------------
 
+def server_kind(row) -> str:
+    """服务器类型:compute 算力服务器 / normal 普通服务器;auto 时按是否检测到 GPU/NPU 判断。"""
+    if row["server_type"] in ("compute", "normal"):
+        return row["server_type"]
+    f = json.loads(row["facts_json"] or "{}") or {}
+    return "compute" if f.get("gpus") or f.get("gpu_pci") or f.get("gpu_vendor") else "normal"
+
+
 def public(row) -> dict:
     """对外展示的服务器信息(不含任何密文/明文凭据)。"""
     return {
@@ -136,6 +144,7 @@ def public(row) -> dict:
         "sites_at": row["sites_at"], "host_key_fp": row["host_key_fp"],
         "proxy_command": row["proxy_command"], "source": row["source"], "rotation_target": row["rotation_target"],
         "bt_username": row["bt_username"], "has_bt_password": bool(row["bt_password_enc"]), "bt_updated_at": row["bt_updated_at"],
+        "server_type": row["server_type"], "kind": server_kind(row), "temp_expires_at": row["temp_expires_at"],
         "has_password": bool(row["password_enc"]), "has_key": bool(row["private_key_enc"]),
         "has_pending_password": bool(row["pending_password_enc"]),
         "ssh_command": f"ssh {'-p ' + str(row['port']) + ' ' if row['port'] != 22 else ''}{row['username']}@{row['host']}",
@@ -168,7 +177,7 @@ def resolve(ref, groups=None) -> dict:
     return row
 
 
-def list_rows(groups=None, group=None, status=None, keyword=None):
+def list_rows(groups=None, group=None, status=None, keyword=None, kind=None):
     rows = db.all("SELECT * FROM servers ORDER BY group_name, name")
     out = []
     kw = (keyword or "").lower()
@@ -178,6 +187,8 @@ def list_rows(groups=None, group=None, status=None, keyword=None):
         if group and r["group_name"] != group:
             continue
         if status and r["status"] != status:
+            continue
+        if kind and server_kind(r) != kind:
             continue
         if kw and kw not in " ".join(str(r[k]) for k in ("name", "host", "group_name", "tags", "location", "provider", "notes")).lower():
             continue
@@ -233,6 +244,8 @@ def save_server(data: dict, sid=None, actor="admin") -> dict:
         "notes": str(pick("notes", "")),
         "proxy_command": str(pick("proxy_command", "")).strip(),
         "rotation_target": pick("rotation_target", "password") if pick("rotation_target", "password") in ("password", "key") else "password",
+        "server_type": pick("server_type", "auto") if pick("server_type", "auto") in ("auto", "normal", "compute") else "auto",
+        "temp_expires_at": data["temp_expires_at"] if "temp_expires_at" in data else (old["temp_expires_at"] if old else None),
         "rotation_enabled": 1 if pick("rotation_enabled", 0) else 0,
         "rotation_days": rotation_days,
         "updated_at": now_iso(),
@@ -270,6 +283,9 @@ def save_server(data: dict, sid=None, actor="admin") -> dict:
 def delete_server(sid, actor="admin"):
     row = get_row(sid)
     db.run("DELETE FROM servers WHERE id=?", (sid,))
+    if row["source"] == "quick_add":
+        from . import local_import
+        local_import.remove_config_block(row["name"])
     audit(actor, "server.delete", row, f"{row['username']}@{row['host']}:{row['port']}")
 
 
@@ -333,7 +349,16 @@ def open_ssh(row, password=None, use_key=True, timeout=10):
             try:
                 client = ssh.connect(row["host"], row["port"], row["username"], **kwargs)
                 break
-            except (ssh.AuthFailed, ssh.HostKeyMismatch):
+            except ssh.AuthFailed:
+                # 凭据可能刚被轮换(并发任务),重新读取后再试一次
+                fresh = db.one("SELECT * FROM servers WHERE id=?", (row["id"],))
+                if password or attempt or not fresh or (fresh["password_enc"], fresh["private_key_enc"]) == (row["password_enc"], row["private_key_enc"]):
+                    raise
+                row.update(fresh)
+                c = creds(row)
+                kwargs.update(password=c["password"], pkey_text=c["private_key"] if use_key and row["auth_type"] == "key" else None,
+                              passphrase=c["key_passphrase"])
+            except ssh.HostKeyMismatch:
                 raise
             except ssh.SSHError:
                 # 代理(如 VPN 的 SOCKS5)在并发高时偶尔会断开,稍等重试
@@ -541,6 +566,30 @@ def collect_sites(row, actor="admin") -> dict:
     db.run("UPDATE servers SET sites_json=?, sites_at=? WHERE id=?", (json.dumps(sites, ensure_ascii=False), ts, row["id"]))
     audit(actor, "sites.collect", row, f"nginx {len(sites['nginx'])} / apache {len(sites['apache'])} / 端口 {len(sites['ports'])}")
     return {"server_id": row["id"], "server": row["name"], **sites}
+
+
+def gpu_live(row, actor="admin") -> dict:
+    """实时查询 GPU/NPU 使用情况与占用进程。"""
+    client = open_ssh(row)
+    try:
+        code, out, err, _ = ssh.run(client, "sh -s", 30, collectors.GPU_LIVE_SCRIPT)
+    finally:
+        client.close()
+    if "@@END@@" not in out:
+        raise ServiceError(f"查询失败: {_explain(err, code)}")
+    data = collectors.parse_gpu_live(out)
+    if not data["vendor"]:
+        raise ServiceError("未检测到 nvidia-smi / npu-smi(未安装驱动或不是算力服务器)")
+    data["queried_at"] = now_iso()
+    return data
+
+
+def cleanup_expired(actor="system"):
+    """删除到期的临时服务器。"""
+    rows = db.all("SELECT id, name FROM servers WHERE temp_expires_at IS NOT NULL AND temp_expires_at<=?", (now_iso(),))
+    for r in rows:
+        delete_server(r["id"], actor=actor)
+    return [r["name"] for r in rows]
 
 
 def get_sites(row):
