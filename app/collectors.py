@@ -61,7 +61,7 @@ elif command -v npu-smi >/dev/null 2>&1; then
   k gpu_driver "$(cat /usr/local/Ascend/driver/version.info 2>/dev/null | grep -m1 -i version | cut -d= -f2)"
   k npu_raw "$(npu-smi info 2>/dev/null | head -120 | base64 | tr -d '\n')"
 fi
-k gpu_pci "$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display controller|processing accelerators' | grep -viE 'aspeed|matrox|cirrus|virtio|qxl|vmware|bochs|red hat|hyper-v' | cut -d: -f3- | sed 's/^ *//' | tr '\n' ';')"
+k gpu_pci "$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display controller|processing accelerators' | grep -iE 'nvidia|advanced micro|amd/ati|radeon instinct|huawei|cambricon|hygon|iluvatar|moore threads|biren|enflame|metax|habana|gaudi' | cut -d: -f3- | sed 's/^ *//' | tr '\n' ';')"
 """
 
 STATUS_SCRIPT = r"""
