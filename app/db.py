@@ -114,7 +114,8 @@ class DB:
     def _migrate(self):
         cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(servers)")}
         for col, ddl in (("proxy_command", "TEXT NOT NULL DEFAULT ''"), ("source", "TEXT NOT NULL DEFAULT ''"),
-                         ("pending_key_enc", "TEXT"), ("rotation_target", "TEXT NOT NULL DEFAULT 'password'")):
+                         ("pending_key_enc", "TEXT"), ("rotation_target", "TEXT NOT NULL DEFAULT 'password'"),
+                         ("bt_username", "TEXT"), ("bt_password_enc", "TEXT"), ("bt_updated_at", "TEXT")):
             if col not in cols:
                 self.conn.execute(f"ALTER TABLE servers ADD COLUMN {col} {ddl}")
 

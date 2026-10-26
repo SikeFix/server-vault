@@ -1,6 +1,7 @@
 """Agent 能力层:按 Token 权限(scope)与分组范围约束,供 REST 与 MCP 共用。"""
 from dataclasses import dataclass, field
 
+from . import btpanel
 from . import services as S
 from .vault import vault
 
@@ -106,6 +107,24 @@ def rotate(ctx, ref, target="password"):
     ctx.need("rotate")
     sid = S.resolve(ref, ctx.groups)["id"]
     return S.rotate_key(sid, actor=ctx.actor) if target == "key" else S.rotate_password(sid, actor=ctx.actor)
+
+
+def bt_info(ctx, ref):
+    ctx.need("read")
+    return btpanel.info(S.resolve(ref, ctx.groups), include_secret="secret" in ctx.scopes)
+
+
+def bt_set_password(ctx, ref, username=None, password=None):
+    ctx.need("rotate")
+    res = btpanel.set_credentials(S.resolve(ref, ctx.groups)["id"], username, password, actor=ctx.actor)
+    if "secret" not in ctx.scopes:
+        res["password"] = "(已加密保存,当前 Token 无 secret 权限,不返回明文)"
+    return res
+
+
+def bt_temp_login(ctx, ref):
+    ctx.need("secret")
+    return btpanel.temp_login(S.resolve(ref, ctx.groups)["id"], actor=ctx.actor)
 
 
 def whoami(ctx):

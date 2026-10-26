@@ -30,6 +30,7 @@
 | **配置信息** | CPU 型号/核数/路数、内存、Swap、磁盘、**服务器厂商与型号**、序列号、主板、虚拟化类型、系统/内核、内网 IP |
 | **位置信息** | 手填机房/服务商 + 自动识别公网 IP 归属地(国家/省/市/运营商/AS) |
 | **批量状态检测** | 并发检测端口连通、SSH 登录、延迟、负载、内存与根分区使用率 |
+| **宝塔面板** | 自动识别宝塔版本、运行状态、面板地址(含安全入口 / SSL);一键修改面板账号密码(调用面板自带 public 模块,与 `bt 5` 相同算法,兼容 9.x ~ 11.x,写入后回读校验),支持批量改密;**一键登录**(宝塔原生一次性临时令牌,15 分钟有效);密码加密托管、旧密码归档 |
 | **网站发现** | 解析 `nginx -T`(域名、监听、根目录、反向代理、upstream、跳转、**SSL 证书到期**)、Apache vhost、监听端口与进程、Docker 容器 |
 | **Agent 服务** | MCP(Streamable HTTP + stdio 桥接)与 REST API;Token 按权限(read / exec / secret / rotate)和分组隔离;危险命令正则拦截;全量审计 |
 | **界面** | 卡片 / 列表双视图、按分组筛选、状态排序、浅色 / 深色 / 跟随系统主题 |
@@ -112,6 +113,9 @@ claude mcp add --transport http server-vault http://127.0.0.1:8765/mcp \
 | `get_websites` | read | 站点、反代、证书到期、端口、容器 |
 | `exec_command` | exec | 执行命令(支持 sudo、超时) |
 | `batch_exec` | exec | 多台并发执行 |
+| `bt_panel_info` | read | 宝塔版本、状态、面板地址、用户名(有 secret 权限时含密码) |
+| `bt_set_password` | rotate | 修改宝塔面板账号密码 |
+| `bt_temp_login` | secret | 生成宝塔一次性临时登录链接 |
 | `get_credentials` | secret | 读取明文凭据 |
 | `rotate_password` | rotate | 立即轮换密码 |
 
@@ -167,7 +171,7 @@ tests/            端到端测试 + 模拟 SSH 服务器
 
 ## 🧪 测试
 
-端到端测试会启动模拟 SSH 服务器和后端,覆盖保险库、轮换、采集、网站解析、批量检测、Agent REST、MCP、stdio 桥接、Web 终端、指纹校验、调度器等 97 项断言:
+端到端测试会启动模拟 SSH 服务器和后端,覆盖保险库、轮换、采集、网站解析、批量检测、Agent REST、MCP、stdio 桥接、Web 终端、指纹校验、调度器等 112 项断言:
 
 ```bash
 .venv/bin/pip install httpx   # 或 uv pip install httpx

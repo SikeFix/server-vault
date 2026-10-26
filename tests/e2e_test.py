@@ -177,6 +177,35 @@ def run_tests(mock2_stop, data_dir):
     hist = c.get(f"/api/servers/{ku['id']}/history").json()
     ok(sum("PRIVATE KEY" in h["password"] for h in hist) == 2, "旧私钥归档到历史")
 
+    print("[6c] 宝塔面板")
+    import hashlib
+    bt_db = lambda: json.load(open(mock_sshd.BT_DIR / "data" / "fake_db.json"))
+    salt = lambda pw: hashlib.md5((hashlib.md5(pw.encode()).hexdigest() + "|salt|1").encode()).hexdigest()
+    f = c.post(f"/api/servers/{web['id']}/facts").json()["facts"]
+    ok(f.get("bt_installed") == "1" and f.get("bt_version") == "11.8.1" and f.get("bt_port") == "36090"
+       and f.get("bt_path") == "/abc123" and f.get("bt_ssl") == "1", "采集宝塔版本 / 端口 / 安全入口 / SSL")
+    bt = c.post(f"/api/servers/{web['id']}/bt/refresh").json()
+    ok(bt["username"] == "bt_admin" and bt["url"] == "https://127.0.0.1:36090/abc123", "读取宝塔用户名与面板地址")
+    r = c.post(f"/api/servers/{web['id']}/bt/credentials", json={}).json()
+    ok(len(r["password"]) == 20 and r["username"] == "bt_admin", "自动生成 20 位宝塔密码")
+    ok(bt_db()["users"][0]["password"] == salt(r["password"]), "按宝塔算法写入面板数据库")
+    ok(c.get(f"/api/servers/{web['id']}/bt/secret").json()["password"] == r["password"], "宝塔密码加密保存可查看")
+    r2 = c.post(f"/api/servers/{web['id']}/bt/credentials", json={"username": "ops_admin", "password": "MyBtPass#2026"}).json()
+    ok(bt_db()["users"][0]["username"] == "ops_admin" and bt_db()["users"][0]["password"] == salt("MyBtPass#2026"), "同时修改用户名和密码")
+    ok(any(h["reason"].startswith("宝塔旧密码") and h["password"] == r["password"] for h in c.get(f"/api/servers/{web['id']}/history").json()), "宝塔旧密码进入历史")
+    ok(c.post(f"/api/servers/{web['id']}/bt/credentials", json={"username": "admin"}).status_code == 400, "拒绝 admin 等弱用户名")
+    t = c.post(f"/api/servers/{web['id']}/bt/temp-login").json()
+    tok = t["url"].split("tmp_token=")[1]
+    ok(t["url"].startswith("https://127.0.0.1:36090/login?tmp_token=") and any(
+        x["token"] == hashlib.md5((tok + x["salt"]).encode()).hexdigest() for x in bt_db()["temp_login"]), "生成宝塔一次性临时登录令牌")
+    c.post(f"/api/servers/{dep['id']}/facts")
+    ok(c.post(f"/api/servers/{dep['id']}/bt/refresh").json()["username"] == "ops_admin", "非 root 账号通过 sudo 操作宝塔")
+    c.post(f"/api/servers/{dev['id']}/facts")
+    r = c.post(f"/api/servers/{dev['id']}/bt/refresh")
+    ok(r.status_code == 400 and "root" in r.json()["detail"], "无 sudo 账号给出权限提示")
+    res = c.post("/api/bt/reset", json={"ids": [web["id"], dep["id"]]}).json()
+    ok(all(x["ok"] for x in res) and bt_db()["users"][0]["password"] == salt(c.get(f"/api/servers/{dep['id']}/bt/secret").json()["password"]), "批量修改宝塔密码")
+
     print("[7] 自动化任务")
     a = c.post("/api/automations", json={"name": "巡检", "script": "echo check-$(whoami)", "target_type": "group",
                                          "target_value": ["生产", "测试"], "interval_minutes": 0}).json()
@@ -231,6 +260,11 @@ def run_tests(mock2_stop, data_dir):
     ok(json.loads(r["content"][0]["text"])["verified"], "tools/call rotate_password")
     r = call(t_ops, "get_credentials", {"server": "web-01"})
     ok(json.loads(r["content"][0]["text"])["password"] == mock_sshd.USERS["root"], "tools/call get_credentials 与服务器一致")
+    r = json.loads(call(t_ops, "bt_panel_info", {"server": "web-01"})["content"][0]["text"])
+    ok(r["version"] == "11.8.1" and r["password"], "tools/call bt_panel_info(含 secret 权限时返回密码)")
+    r = json.loads(call(t_ops, "bt_set_password", {"server": "web-01"})["content"][0]["text"])
+    ok(bt_db()["users"][0]["password"] == salt(r["password"]), "tools/call bt_set_password")
+    ok("bt_temp_login" not in tools_read, "只读 Token 看不到宝塔临时登录工具")
 
     print("[10] stdio 桥接")
     msgs = "\n".join(json.dumps(m) for m in [

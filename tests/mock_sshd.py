@@ -25,6 +25,28 @@ LOCK = threading.Lock()
 MOCK_HOME = Path(tempfile.mkdtemp(prefix="mock-home-"))
 
 
+BT_DIR = MOCK_HOME / "bt_panel"
+
+
+def setup_bt():
+    """在临时目录里搭一个最小化的宝塔面板目录结构。"""
+    import shutil
+    import sys
+    for d in ("class", "data", "pyenv/bin"):
+        (BT_DIR / d).mkdir(parents=True, exist_ok=True)
+    (BT_DIR / "class" / "common.py").write_text("g.version = '11.8.1'\n")
+    shutil.copy(HERE / "fake_bt" / "public.py", BT_DIR / "class" / "public.py")
+    (BT_DIR / "data" / "port.pl").write_text("36090")
+    (BT_DIR / "data" / "admin_path.pl").write_text("/abc123")
+    (BT_DIR / "data" / "ssl.pl").write_text("True")
+    py = BT_DIR / "pyenv" / "bin" / "python3"
+    if not py.exists():
+        py.symlink_to(sys.executable)
+
+
+setup_bt()
+
+
 def home(user):
     h = MOCK_HOME / user
     (h / ".ssh").mkdir(parents=True, exist_ok=True)
@@ -98,6 +120,7 @@ def env(user="root"):
     e = dict(os.environ)
     e["PATH"] = f"{FAKE_BIN}:{e['PATH']}"
     e["HOME"] = str(home(user))
+    e["BT_PANEL"] = str(BT_DIR)
     return e
 
 

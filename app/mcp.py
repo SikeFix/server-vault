@@ -44,6 +44,13 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "servers": _SERVERS, "command": {"type": "string"},
          "timeout": {"type": "integer"}, "sudo": {"type": "boolean"}}, "required": ["command"]}},
+    {"name": "bt_panel_info", "scope": "read", "description": "宝塔面板信息:版本、运行状态、面板地址(含安全入口)、用户名;有 secret 权限时含密码",
+     "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
+    {"name": "bt_set_password", "scope": "rotate", "description": "修改宝塔面板登录密码(不传 password 则自动生成强密码),可同时修改用户名;新密码加密保存",
+     "inputSchema": {"type": "object", "properties": {"server": _SERVER, "username": {"type": "string"},
+                     "password": {"type": "string"}}, "required": ["server"]}},
+    {"name": "bt_temp_login", "scope": "secret", "description": "生成宝塔面板一次性临时登录链接(15 分钟有效,用后失效)",
+     "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
     {"name": "get_credentials", "scope": "secret", "description": "读取服务器明文登录凭据(密码/私钥),仅在必须时使用",
      "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
     {"name": "rotate_password", "scope": "rotate", "description": "立即轮换服务器凭据:target=password 轮换登录密码(自动选择 chpasswd/sudo/passwd),target=key 轮换 SSH 密钥",
@@ -69,6 +76,12 @@ def _call(ctx, name, a):
         return agent.exec_command(ctx, a["server"], a["command"], a.get("timeout"), a.get("sudo", False))
     if name == "batch_exec":
         return agent.batch_exec(ctx, a.get("servers"), a["command"], a.get("timeout"), a.get("sudo", False))
+    if name == "bt_panel_info":
+        return agent.bt_info(ctx, a["server"])
+    if name == "bt_set_password":
+        return agent.bt_set_password(ctx, a["server"], a.get("username"), a.get("password"))
+    if name == "bt_temp_login":
+        return agent.bt_temp_login(ctx, a["server"])
     if name == "get_credentials":
         return agent.credentials(ctx, a["server"])
     if name == "rotate_password":

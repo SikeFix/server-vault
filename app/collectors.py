@@ -40,6 +40,16 @@ k ips "$(hostname -I 2>/dev/null || ifconfig 2>/dev/null | awk '/inet / && $2 !=
 k timezone "$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)"
 k docker "$(docker --version 2>/dev/null)"
 k processes "$(ps -e 2>/dev/null | wc -l | tr -d ' ')"
+BTP="${BT_PANEL:-/www/server/panel}"
+if [ -d "$BTP" ]; then
+  k bt_installed 1
+  k bt_version "$({ cat "$BTP/class/common.py" 2>/dev/null || $S cat "$BTP/class/common.py" 2>/dev/null; } | grep -m1 -oE "g\.version *= *['\"][0-9.]+" | grep -oE "[0-9][0-9.]*$")"
+  k bt_port "$(cat "$BTP/data/port.pl" 2>/dev/null || $S cat "$BTP/data/port.pl" 2>/dev/null)"
+  k bt_path "$(cat "$BTP/data/admin_path.pl" 2>/dev/null || $S cat "$BTP/data/admin_path.pl" 2>/dev/null)"
+  k bt_domain "$(cat "$BTP/data/domain.conf" 2>/dev/null || $S cat "$BTP/data/domain.conf" 2>/dev/null)"
+  k bt_ssl "$( { [ -f "$BTP/data/ssl.pl" ] || $S test -f "$BTP/data/ssl.pl"; } 2>/dev/null && echo 1 || echo 0)"
+  k bt_running "$(pgrep -f BT-Panel >/dev/null 2>&1 && echo 1 || echo 0)"
+fi
 """
 
 STATUS_SCRIPT = r"""
@@ -90,6 +100,9 @@ def parse_facts(text: str) -> dict:
     facts = {k: kv.get(k, "") for k in (
         "hostname", "os", "kernel", "arch", "cpu_model", "vendor", "product", "serial", "board",
         "bios", "virt", "load", "timezone", "docker")}
+    for k in ("bt_installed", "bt_version", "bt_port", "bt_path", "bt_domain", "bt_ssl", "bt_running"):
+        if kv.get(k):
+            facts[k] = kv[k]
     facts["cpu_model"] = facts["cpu_model"].strip()
     for k in ("cpu_cores", "cpu_sockets", "mem_total", "mem_available", "swap_total", "uptime_seconds", "processes"):
         facts[k] = _int(kv.get(k))

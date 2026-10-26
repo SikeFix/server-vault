@@ -135,6 +135,7 @@ def public(row) -> dict:
         "facts": json.loads(row["facts_json"] or "null"), "facts_at": row["facts_at"],
         "sites_at": row["sites_at"], "host_key_fp": row["host_key_fp"],
         "proxy_command": row["proxy_command"], "source": row["source"], "rotation_target": row["rotation_target"],
+        "bt_username": row["bt_username"], "has_bt_password": bool(row["bt_password_enc"]), "bt_updated_at": row["bt_updated_at"],
         "has_password": bool(row["password_enc"]), "has_key": bool(row["private_key_enc"]),
         "has_pending_password": bool(row["pending_password_enc"]),
         "ssh_command": f"ssh {'-p ' + str(row['port']) + ' ' if row['port'] != 22 else ''}{row['username']}@{row['host']}",
@@ -315,6 +316,7 @@ def reveal(sid, actor="admin") -> dict:
     return {"id": row["id"], "name": row["name"], "host": row["host"], "port": row["port"],
             "username": row["username"], "password": c["password"], "private_key": c["private_key"],
             "key_passphrase": c["key_passphrase"], "pending_password": c["pending_password"],
+            "bt_username": row["bt_username"], "bt_password": vault.decrypt(row["bt_password_enc"]),
             "ssh_command": public(row)["ssh_command"]}
 
 
@@ -504,6 +506,10 @@ def collect_facts(row, actor="admin") -> dict:
     if code != 0 and not out.strip():
         raise ServiceError(f"采集失败: {_explain(err, code)}")
     facts = collectors.parse_facts(out)
+    old = json.loads(row["facts_json"] or "{}") or {}
+    for k in ("bt_version", "bt_port", "bt_path", "bt_domain", "bt_ssl"):
+        if not facts.get(k) and old.get(k) and facts.get("bt_installed"):
+            facts[k] = old[k]  # 非 root 账号读不到面板文件时,保留之前用 root 读到的值
     if get_settings()["geo_lookup"]:
         facts["geo"] = geo_lookup(row["host"])
     facts["cloud"] = detect_cloud(facts)

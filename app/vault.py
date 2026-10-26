@@ -11,7 +11,8 @@ from .db import db
 
 VERIFIER = b"server-vault:v1"
 ENC_COLUMNS = {
-    "servers": ["password_enc", "private_key_enc", "key_passphrase_enc", "pending_password_enc", "pending_key_enc"],
+    "servers": ["password_enc", "private_key_enc", "key_passphrase_enc", "pending_password_enc", "pending_key_enc",
+                "bt_password_enc"],
     "password_history": ["password_enc"],
 }
 

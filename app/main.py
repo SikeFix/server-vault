@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, FastAPI, Header, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, local_import, mcp, scheduler
+from . import agent, btpanel, local_import, mcp, scheduler
 from . import services as S
 from .config import AUTO_UNLOCK_PASSWORD, BASE_DIR, STATIC_DIR, VERSION
 from .vault import VaultError, VaultLocked, vault
@@ -255,6 +255,38 @@ def exec_many(payload: dict = Body(...)):
     return S.run_many(_rows(payload.get("ids")), lambda r: S.exec_command(r, cmd, timeout, sudo))
 
 
+@api.get("/servers/{sid}/bt")
+def bt_info(sid: int):
+    return btpanel.info(S.get_row(sid))
+
+
+@api.post("/servers/{sid}/bt/refresh")
+def bt_refresh(sid: int):
+    return btpanel.refresh(S.get_row(sid))
+
+
+@api.get("/servers/{sid}/bt/secret")
+def bt_secret(sid: int):
+    row = S.get_row(sid)
+    S.audit("admin", "secret.reveal", row, "宝塔面板密码")
+    return btpanel.info(row, include_secret=True)
+
+
+@api.post("/servers/{sid}/bt/credentials")
+def bt_credentials(sid: int, payload: dict = Body(default={})):
+    return btpanel.set_credentials(sid, payload.get("username"), payload.get("password"))
+
+
+@api.post("/servers/{sid}/bt/temp-login")
+def bt_temp_login(sid: int):
+    return btpanel.temp_login(sid)
+
+
+@api.post("/bt/reset")
+def bt_reset_many(payload: dict = Body(...)):
+    return S.run_many(_rows(payload.get("ids")), lambda r: btpanel.set_credentials(r["id"]), workers=8)
+
+
 @api.get("/generate-password")
 def gen_password(length: int = None):
     return {"password": S.generate_password(length)}
@@ -378,6 +410,21 @@ def ag_batch_exec(payload: dict = Body(...), ctx=Depends(agent_ctx)):
 @ag.get("/servers/{ref}/credentials")
 def ag_credentials(ref: str, ctx=Depends(agent_ctx)):
     return agent.credentials(ctx, ref)
+
+
+@ag.get("/servers/{ref}/bt")
+def ag_bt(ref: str, ctx=Depends(agent_ctx)):
+    return agent.bt_info(ctx, ref)
+
+
+@ag.post("/servers/{ref}/bt/password")
+def ag_bt_password(ref: str, payload: dict = Body(default={}), ctx=Depends(agent_ctx)):
+    return agent.bt_set_password(ctx, ref, payload.get("username"), payload.get("password"))
+
+
+@ag.post("/servers/{ref}/bt/temp-login")
+def ag_bt_temp_login(ref: str, ctx=Depends(agent_ctx)):
+    return agent.bt_temp_login(ctx, ref)
 
 
 @ag.post("/servers/{ref}/rotate")

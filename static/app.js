@@ -326,6 +326,7 @@ function renderToolbar() {
       <button class="btn sm" data-b="facts">采集配置</button>
       <button class="btn sm" data-b="exec">批量执行</button>
       <button class="btn sm" data-b="rotate">轮换密码</button>
+      <button class="btn sm" data-b="bt">宝塔改密</button>
       <button class="btn sm danger" data-b="delete">删除</button>
       <button class="btn sm ghost" data-b="clear">取消选择</button>`;
     $$('[data-b]', tb).forEach(b => b.onclick = () => batchAction(b.dataset.b, b));
@@ -381,7 +382,7 @@ function srvCard(s) {
       <div>${ICON.cpu}<span>${esc(f.os || '尚未采集系统信息')}${f.model ? ' · ' + esc(f.model) : ''}</span></div>
     </div>
     ${f.cpu_cores ? `<div class="specs"><span class="spec"><b>${f.cpu_cores}</b> 核</span><span class="spec"><b>${fmtBytes(f.mem_total)}</b> 内存</span>
-      ${disk ? `<span class="spec"><b>${fmtBytes(disk)}</b> 磁盘</span>` : ''}${s.proxy_command ? '<span class="spec">经代理</span>' : ''}</div>` : ''}
+      ${disk ? `<span class="spec"><b>${fmtBytes(disk)}</b> 磁盘</span>` : ''}${f.bt_installed ? `<span class="spec bt">宝塔 <b>${esc(f.bt_version || '')}</b></span>` : ''}${s.proxy_command ? '<span class="spec">经代理</span>' : ''}</div>` : ''}
     ${d.mem_pct != null || d.disk_pct != null
       ? `<div class="meters"><span>内存</span>${meterBar(d.mem_pct)}<span>${d.mem_pct ?? '—'}%</span><span>磁盘</span>${meterBar(d.disk_pct)}<span>${d.disk_pct ?? '—'}%</span></div>`
       : d.error ? `<div class="small" style="color:var(--${color || 'muted'});overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.error)}">${esc(d.error)}</div>` : ''}
@@ -422,7 +423,7 @@ function renderTable() {
         <td><div class="row" style="flex-wrap:nowrap">${osBadge(f.os)}<div><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.group_name)}${s.tags.map(t => ` · ${esc(t)}`).join('')}</div></div></div></td>
         <td class="mono">${esc(s.username)}@${esc(s.host)}${s.port !== 22 ? ':' + s.port : ''}</td>
         <td>${esc(locText(s) || '—')}<div class="sub">${esc(provText(s))}</div></td>
-        <td class="clip">${esc(f.os || '—')}<div class="sub">${esc(f.model || f.virt || '')}</div></td>
+        <td class="clip">${esc(f.os || '—')}<div class="sub">${f.bt_installed ? `宝塔 ${esc(f.bt_version || '')} · ` : ''}${esc(f.model || f.virt || '')}</div></td>
         <td>${f.cpu_cores ? f.cpu_cores + ' 核' : '—'} / ${f.mem_total ? fmtBytes(f.mem_total) : '—'}<div class="sub">${disk ? '磁盘 ' + fmtBytes(disk) : ''}</div></td>
         <td>${esc(d.load || '—')}<div class="sub clip" title="${esc(d.error || '')}">${d.mem_pct != null ? `内存 ${d.mem_pct}% · 磁盘 ${d.disk_pct ?? '—'}%` : esc(d.error || '')}</div></td>
         <td>${rotationCell(s)}</td>
@@ -505,6 +506,16 @@ async function batchAction(act, btn) {
     return busy(btn, async () => {
       const res = await api('/rotate', { method: 'POST', body: { ids } });
       showResults('密码轮换结果', res.map(r => ({ name: r.server, ok: r.ok && r.verified !== false, text: r.ok ? r.message : r.error })));
+      await loadServers();
+    });
+  }
+  if (act === 'bt') {
+    const bts = ids.filter(id => S.servers.find(s => s.id === id)?.facts?.bt_installed);
+    if (!bts.length) return toast('选中的服务器都没有检测到宝塔面板', 'error');
+    if (!await confirmBox(`为 ${bts.length} 台安装了宝塔的服务器生成新的面板密码?\n用户名保持不变,新密码加密保存到保险库,旧密码进入历史。`, { ok: '批量修改' })) return;
+    return busy(btn, async () => {
+      const res = await api('/bt/reset', { method: 'POST', body: { ids: bts } });
+      showResults('宝塔改密结果', res.map(r => ({ name: r.server, ok: r.ok, text: r.ok ? `用户名 ${r.username},新密码已保存` : r.error })));
       await loadServers();
     });
   }
@@ -648,7 +659,7 @@ async function renderDetail() {
   try { s = await api('/servers/' + S.detail); } catch (e) { toast(e.message, 'error'); return closeDrawer(); }
   const i = S.servers.findIndex(x => x.id === s.id);
   if (i >= 0) S.servers[i] = s;
-  const TABS = [['overview', '概览'], ['sites', '网站与端口'], ['creds', '凭据与轮换'], ['exec', '执行命令'], ['logs', '操作日志']];
+  const TABS = [['overview', '概览'], ['sites', '网站与端口'], ['bt', '宝塔面板'], ['creds', '凭据与轮换'], ['exec', '执行命令'], ['logs', '操作日志']];
   const f = s.facts || {};
   d.innerHTML = `<div class="drawer-head">
       <div class="drawer-title">${osBadge(f.os)}
@@ -683,7 +694,7 @@ async function renderDetail() {
 
 function renderTab(s) {
   const body = $('#dbody');
-  ({ overview: tabOverview, sites: tabSites, creds: tabCreds, exec: tabExec, logs: tabLogs })[S.tab](s, body);
+  ({ overview: tabOverview, sites: tabSites, bt: tabBt, creds: tabCreds, exec: tabExec, logs: tabLogs })[S.tab](s, body);
 }
 
 const kv = pairs => `<dl class="kv">${pairs.filter(p => p).map(([k, v]) => `<dt>${k}</dt><dd>${v === '' || v == null ? '<span class="muted">—</span>' : v}</dd>`).join('')}</dl>`;
@@ -799,6 +810,88 @@ async function tabSites(s, body) {
     toast('扫描完成', 'ok');
     if (S.tab === 'sites') tabSites(s, body);
   });
+}
+
+async function tabBt(s, body) {
+  const f = s.facts || {};
+  const refreshBtn = '<button class="btn" id="btRefresh">' + ICON.refresh + '刷新宝塔信息</button>';
+  const bindRefresh = () => { const b = $('#btRefresh', body); if (b) b.onclick = () => busy(b, async () => {
+    await api(`/servers/${s.id}/bt/refresh`, { method: 'POST' });
+    toast('宝塔信息已更新', 'ok'); await renderDetail(); loadServers();
+  }); };
+  if (!f.bt_installed) {
+    body.innerHTML = `<div class="card empty">${ICON.server}${s.facts ? '未检测到宝塔面板(/www/server/panel 不存在)' : '尚未采集配置信息'}<div style="margin-top:14px">${refreshBtn}</div></div>`;
+    return bindRefresh();
+  }
+  body.innerHTML = '<div class="empty">加载中…</div>';
+  const bt = await api(`/servers/${s.id}/bt`);
+  const metric = (l, v) => `<div class="metric"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+  body.innerHTML = `
+    <div class="hero-metrics">
+      ${metric('面板版本', `<span style="color:#20a53a">v${esc(bt.version || '?')}</span>`)}
+      ${metric('运行状态', bt.running ? '<span class="badge green">运行中</span>' : '<span class="badge red">未运行</span>')}
+      ${metric('面板端口', esc(bt.port || '—'))}
+      ${metric('访问协议', bt.ssl ? 'HTTPS' : 'HTTP')}
+    </div>
+    <div class="grid c2">
+      <div class="card card-pad"><h3><span class="ic">${ICON.globe}面板访问</span>${refreshBtn}</h3>
+        ${kv([['面板地址', bt.url ? `<a href="${esc(bt.url)}" target="_blank" rel="noopener" class="mono">${esc(bt.url)}</a> <button class="btn sm ghost" data-copy="${esc(bt.url)}">复制</button>` : ''],
+          ['安全入口', `<span class="mono">${esc(bt.entrance || '/')}</span>`],
+          ['用户名', bt.username ? `<span class="mono">${esc(bt.username)}</span> <button class="btn sm ghost" data-copy="${esc(bt.username)}">复制</button>` : '<span class="muted">点击「刷新宝塔信息」读取</span>'],
+          ['密码', bt.has_password ? `<span class="secret" id="btPw">••••••••••••</span> <button class="btn sm ghost" id="btShow">显示</button><button class="btn sm ghost" id="btCopy">复制</button>`
+            : '<span class="muted">未托管 —— 在右侧修改一次后由保险库保管</span>'],
+          ['最近修改', bt.updated_at ? `${fmtTime(bt.updated_at)} <span class="muted">(${relTime(bt.updated_at)})</span>` : '']])}
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="btLogin">${ICON.bolt}一键登录宝塔</button>
+          ${bt.url ? `<a class="btn" href="${esc(bt.url)}" target="_blank" rel="noopener">打开登录页</a>` : ''}</div>
+        <div class="hint">一键登录使用宝塔原生临时令牌:15 分钟内有效,使用一次即失效,无需输入密码。${s.proxy_command ? '内网服务器需本机能访问该地址(VPN)。' : ''}</div>
+      </div>
+      <div class="card card-pad"><h3><span class="ic">${ICON.key}修改账号密码</span></h3>
+        <form class="form" id="btForm" autocomplete="off">
+          <div class="field full"><label>用户名(留空保持 ${esc(bt.username || '不变')})</label><input class="input mono" name="username" placeholder="${esc(bt.username || '')}"></div>
+          <div class="field full"><label>新密码(留空自动生成 20 位强密码)</label>
+            <div class="row" style="flex-wrap:nowrap"><input class="input mono" name="password" type="password" autocomplete="new-password">
+            <button type="button" class="btn" id="btGen">生成</button><button type="button" class="btn" id="btEye">显示</button></div></div>
+          <div class="full"><button class="btn primary" id="btSave">保存修改</button></div>
+        </form>
+        <div class="hint" style="margin-top:12px;line-height:1.7">直接调用宝塔自带的 public 模块,与 <span class="mono">bt 5</span> 命令相同的加盐算法,兼容 9.x ~ 11.x;写入后立即回读校验。新密码加密保存到保险库,旧密码进入历史记录。</div>
+      </div>
+    </div>`;
+  bindRefresh();
+  let sec = null;
+  const getSec = async () => sec || (sec = await api(`/servers/${s.id}/bt/secret`));
+  const show = $('#btShow', body);
+  if (show) {
+    show.onclick = e => busy(e.currentTarget, async () => {
+      const el = $('#btPw', body), on = el.dataset.on === '1';
+      el.textContent = on ? '••••••••••••' : (await getSec()).password;
+      el.dataset.on = on ? '' : '1';
+      show.textContent = on ? '显示' : '隐藏';
+    });
+    $('#btCopy', body).onclick = e => busy(e.currentTarget, async () => copy((await getSec()).password));
+  }
+  $('#btLogin', body).onclick = e => {
+    const w = window.open('about:blank', '_blank');
+    busy(e.currentTarget, async () => {
+      try {
+        const r = await api(`/servers/${s.id}/bt/temp-login`, { method: 'POST' });
+        if (w) w.location = r.url; else window.open(r.url, '_blank');
+      } catch (err) { if (w) w.close(); throw err; }
+    });
+  };
+  const form = $('#btForm', body);
+  $('#btGen', body).onclick = async () => { form.password.value = (await api('/generate-password?length=20')).password; form.password.type = 'text'; };
+  $('#btEye', body).onclick = () => form.password.type = form.password.type === 'password' ? 'text' : 'password';
+  $('#btSave', body).onclick = e => {
+    e.preventDefault();
+    busy(e.currentTarget, async () => {
+      const r = await api(`/servers/${s.id}/bt/credentials`, { method: 'POST', body: { username: form.username.value, password: form.password.value } });
+      modal({ title: '宝塔账号密码已更新', body: `${kv([['面板地址', r.url ? `<span class="mono">${esc(r.url)}</span>` : '—'],
+        ['用户名', `<span class="mono">${esc(r.username)}</span> <button class="btn sm ghost" data-copy="${esc(r.username)}">复制</button>`],
+        ['新密码', `<span class="secret">${esc(r.password)}</span> <button class="btn sm ghost" data-copy="${esc(r.password)}">复制</button>`]])}
+        <div class="hint" style="margin-top:12px">已加密保存到保险库,之后可随时在此查看。</div>` });
+      await renderDetail(); loadServers();
+    });
+  };
 }
 
 function tabCreds(s, body) {
