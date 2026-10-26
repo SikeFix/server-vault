@@ -15,7 +15,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
-from . import collectors, ssh
+from . import collectors, geo_cn, ssh
 from .db import db
 from .vault import vault
 
@@ -130,9 +130,24 @@ def server_kind(row) -> str:
     return "compute" if f.get("gpus") or f.get("gpu_pci") or f.get("gpu_vendor") else "normal"
 
 
+def place_of(row) -> str:
+    """服务器所在地的展示名称:手填位置 > 内网/经代理(内网枢纽)> IP 归属地。"""
+    if row["location"]:
+        return geo_cn.label(row["location"])
+    try:
+        private = ipaddress.ip_address(row["host"]).is_private
+    except ValueError:
+        private = False
+    if row["proxy_command"] or private:
+        return f'{get_settings()["intranet_location"]} · 内网'
+    g = (json.loads(row["facts_json"] or "{}") or {}).get("geo") or {}
+    return " ".join(dict.fromkeys(x for x in (g.get("country"), g.get("region"), g.get("city")) if x))
+
+
 def public(row) -> dict:
     """对外展示的服务器信息(不含任何密文/明文凭据)。"""
     return {
+        "place": place_of(row),
         "id": row["id"], "name": row["name"], "host": row["host"], "port": row["port"],
         "username": row["username"], "auth_type": row["auth_type"], "use_sudo": bool(row["use_sudo"]),
         "group_name": row["group_name"], "tags": [t for t in row["tags"].split(",") if t],
@@ -602,7 +617,7 @@ def map_data() -> dict:
         except ValueError:
             return False
 
-    need = [r for r in rows if not (r["proxy_command"] or private(r))
+    need = [r for r in rows if not (r["proxy_command"] or private(r) or geo_cn.locate(r["location"]))
             and not ((json.loads(r["facts_json"] or "{}") or {}).get("geo") or {}).get("lat")]
     if need and st["geo_lookup"]:
         def fill(r):
@@ -618,7 +633,10 @@ def map_data() -> dict:
     for r in rows:
         f = json.loads(r["facts_json"] or "{}") or {}
         g = f.get("geo") or {}
-        if r["proxy_command"] or private(r):
+        manual = geo_cn.locate(r["location"])
+        if manual:
+            coord, place, intranet = list(manual), geo_cn.label(r["location"]), False
+        elif r["proxy_command"] or private(r):
             coord, place, intranet = hub, st["intranet_location"], True
         elif g.get("lat") is not None:
             coord = [g["lon"], g["lat"]]
@@ -628,6 +646,7 @@ def map_data() -> dict:
             continue
         d = json.loads(r["status_detail"] or "{}") or {}
         points.append({"id": r["id"], "name": r["name"], "host": r["host"], "status": r["status"], "kind": server_kind(r),
+                       "manual": bool(manual), "via_proxy": bool(r["proxy_command"]) or private(r),
                        "group": r["group_name"], "coord": coord, "place": place, "intranet": intranet,
                        "isp": r["provider"] or f.get("cloud") or g.get("isp", ""), "os": f.get("os", ""),
                        "gpu": f.get("gpu_summary", ""), "bt": f.get("bt_version", ""), "latency": r["latency_ms"],

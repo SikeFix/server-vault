@@ -372,7 +372,7 @@ function rotationCell(s) {
   return `<div>每 ${s.rotation_days} 天 ${badge}</div><div class="sub">下次 ${relTime(s.next_rotation_at)}</div>`;
 }
 
-const locText = s => s.location || geoText(s.facts?.geo);
+const locText = s => s.place || s.location || geoText(s.facts?.geo);
 const provText = s => s.provider || s.facts?.cloud || s.facts?.geo?.isp || '';
 const diskTotal = f => (f.disks || []).reduce((a, x) => a + (x.size || 0), 0);
 const meterBar = p => p == null ? '<div class="bar"></div>' : `<div class="bar ${p >= 90 ? 'crit' : p >= 75 ? 'warn' : ''}"><i style="width:${Math.min(p, 100)}%"></i></div>`;
@@ -383,12 +383,21 @@ function srvCard(s) {
   const disk = diskTotal(f);
   const rot = s.rotation_status === 'failed' ? '<span class="badge red">轮换失败</span>' : s.rotation_enabled ? `<span class="badge violet" title="下次 ${fmtTime(s.next_rotation_at)}">${ICON.key}${relTime(s.next_rotation_at)}</span>` : '';
   const gl = d.gpus || [];
+  const shortGpu = t => (t || '').replace(/NVIDIA |GeForce |Tesla |Quadro /g, '');
+  const gpuTile = (g, i) => {
+    const u = g.util ?? 0, mp = g.mem_total ? Math.round((g.mem_used || 0) / g.mem_total * 100) : 0;
+    const lvl = u >= 90 ? 'crit' : u >= 60 ? 'warn' : u >= 5 ? 'busy' : 'idle';
+    return `<div class="gt ${lvl}" title="GPU${i} · 利用率 ${u}% · 显存 ${fmtBytes((g.mem_used || 0) * 1048576)} / ${fmtBytes((g.mem_total || 0) * 1048576)} · ${g.temp ?? '—'}°C">
+      <div class="gt-top"><span>${i}</span><em>${g.temp ?? '—'}°</em></div>
+      <div class="gt-u">${u}<small>%</small></div>
+      <div class="gt-mem"><i style="width:${Math.max(mp, 2)}%"></i></div></div>`;
+  };
+  const busy = gl.filter(g => (g.util || 0) >= 5).length;
+  const memU = gl.reduce((a, g) => a + (g.mem_used || 0), 0), memT = gl.reduce((a, g) => a + (g.mem_total || 0), 0);
   const gpuBlock = s.kind === 'compute' ? `<div class="gpu-strip">
-      <div class="row" style="gap:6px;flex-wrap:nowrap"><span class="spec gpu">${ICON.chip}${esc(f.gpu_summary || '算力服务器')}</span>
-        ${f.gpu_cuda ? `<span class="spec">CUDA ${esc(f.gpu_cuda)}</span>` : ''}</div>
-      ${gl.length ? `<div class="gpu-bars">${gl.map((g, i) => `<div class="gb" title="GPU${i} · 利用率 ${g.util ?? '—'}% · 显存 ${g.mem_used ?? '—'}/${g.mem_total ?? '—'} MiB · ${g.temp ?? '—'}°C">
-        <i style="height:${Math.max(4, g.util || 0)}%" class="${(g.util || 0) >= 90 ? 'crit' : (g.util || 0) >= 60 ? 'warn' : ''}"></i></div>`).join('')}</div>
-        <div class="small muted">GPU 平均利用率 ${Math.round(gl.reduce((a, g) => a + (g.util || 0), 0) / gl.length)}% · 显存 ${fmtBytes(gl.reduce((a, g) => a + (g.mem_used || 0), 0) * 1048576)} / ${fmtBytes(gl.reduce((a, g) => a + (g.mem_total || 0), 0) * 1048576)} · 最高 ${Math.max(...gl.map(g => g.temp || 0))}°C</div>` : ''}
+      <div class="gpu-head">${ICON.chip}<b>${esc(shortGpu(f.gpu_summary) || '算力服务器')}</b>${f.gpu_cuda ? `<span>CUDA ${esc(f.gpu_cuda)}</span>` : ''}</div>
+      ${gl.length ? `<div class="gpu-tiles" style="grid-template-columns:repeat(${gl.length <= 4 ? gl.length : Math.ceil(gl.length / Math.ceil(gl.length / 4))},minmax(0,1fr))">${gl.map(gpuTile).join('')}</div>
+        <div class="gpu-sum"><span><b>${busy}</b>/${gl.length} 卡在用</span><span>显存 <b>${fmtBytes(memU * 1048576)}</b> / ${fmtBytes(memT * 1048576)}</span><span>最高 <b>${Math.max(...gl.map(g => g.temp || 0))}°C</b></span></div>` : ''}
     </div>` : '';
   const temp = s.temp_expires_at ? `<span class="badge orange" title="到期 ${fmtTime(s.temp_expires_at)} 自动移除">临时 · ${relTime(s.temp_expires_at)}移除</span>` : '';
   return `<div class="srv st-${s.status} ${s.kind === 'compute' ? 'compute' : ''} ${S.selected.has(s.id) ? 'sel' : ''}" data-id="${s.id}">
@@ -622,7 +631,7 @@ async function serverForm(s = null) {
       <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="use_sudo" ${s?.use_sudo ? 'checked' : ''}>执行命令默认使用 sudo</label></div>
       <div class="field full"><label>代理 / 跳板(ProxyCommand,可选)</label><input class="input mono" name="proxy_command" value="${v('proxy_command')}" placeholder="例如 /usr/bin/nc -X 5 -x 127.0.0.1:1080 %h %p 或 ssh -W %h:%p jump-host"></div>
       <div class="section-title">位置与描述</div>
-      <div class="field"><label>位置 / 机房</label><input class="input" name="location" value="${v('location')}" placeholder="如:杭州 · 阿里云华东1(留空则自动识别 IP 归属地)"></div>
+      <div class="field"><label>位置 / 机房</label><input class="input" name="location" value="${v('location')}" placeholder="填城市名即可在地图定位,如 重庆 / 杭州;或 名称@经度,纬度"></div>
       <div class="field"><label>服务商</label><input class="input" name="provider" value="${v('provider')}" placeholder="阿里云 / 腾讯云 / 自建 IDC"></div>
       <div class="field full"><label>标签(逗号分隔)</label><input class="input" name="tags" value="${esc(s ? s.tags.join(', ') : '')}"></div>
       <div class="field full"><label>备注</label><textarea class="input" name="notes" rows="2">${v('notes')}</textarea></div>
@@ -1265,7 +1274,8 @@ PAGES.map = async () => {
     <div class="map-wrap"><div class="map-grid"></div><div id="mapChart"></div>
       <div class="map-hud" id="mapHud"></div>
       <div class="map-legend">${[['在线', MAP_COLORS.online], ['算力', MAP_COLORS.compute], ['异常', MAP_COLORS.warn], ['离线', MAP_COLORS.bad], ['内网枢纽', MAP_COLORS.hub]]
-        .map(([l, c]) => `<span><i style="background:${c};box-shadow:0 0 8px ${c}"></i>${l}</span>`).join('')}</div>
+        .map(([l, c]) => `<span><i style="background:${c};box-shadow:0 0 8px ${c}"></i>${l}</span>`).join('')}
+      <span><b class="ln"></b>公网链路</span><span><b class="ln vpn"></b>经 VPN 访问</span></div>
       <div class="map-panel" id="mapPanel"></div></div>`;
   $$('#mapSeg button').forEach(b => b.onclick = () => { S.mapView = b.dataset.v; PAGES.map(); });
   $('#mapReload').onclick = () => PAGES.map();
@@ -1274,7 +1284,9 @@ PAGES.map = async () => {
   const hub = data.hub.coord;
   const groups = {};
   data.points.forEach(p => {
-    const key = p.intranet ? 'hub' : p.coord.map(x => x.toFixed(1)).join(',');
+    const nearHub = Math.abs(p.coord[0] - hub[0]) < 0.06 && Math.abs(p.coord[1] - hub[1]) < 0.06;
+    const key = p.intranet || nearHub ? 'hub' : p.coord.map(x => x.toFixed(1)).join(',');
+    if (key === 'hub') p.coord = hub;
     (groups[key] ||= { key, place: p.place, coord: p.coord, intranet: p.intranet, servers: [] }).servers.push(p);
   });
   const list = Object.values(groups).sort((a, b) => b.servers.length - a.servers.length);
@@ -1285,7 +1297,7 @@ PAGES.map = async () => {
   $('#mapHud').innerHTML = [['地点', list.length || 1], ['服务器', total], ['在线', online], ['算力', data.points.filter(p => p.kind === 'compute').length]]
     .map(([l, v]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
   $('#mapPanel').innerHTML = `<div class="mp-title">分布</div>` + [hubGroup, ...remote].filter(g => g.servers.length).map(g => `
-    <div class="mp-group"><div class="mp-head"><i style="background:${g.intranet ? MAP_COLORS.hub : groupColor(g)}"></i><b>${esc(g.place)}</b>${g.intranet ? '<em>内网</em>' : ''}<span>${g.servers.length}</span></div>
+    <div class="mp-group"><div class="mp-head"><i style="background:${g.intranet ? MAP_COLORS.hub : groupColor(g)}"></i><b>${esc(g.place)}</b>${g.intranet ? '<em>内网</em>' : g.servers.every(x => x.via_proxy) ? '<em class="vpn">经 VPN</em>' : ''}<span>${g.servers.length}</span></div>
       ${g.servers.map(x => `<div class="mp-srv" data-id="${x.id}"><span class="dot ${x.status === 'online' ? 'green' : x.status === 'offline' ? 'red' : 'orange'}"></span>
         <span class="n">${esc(x.name)}</span>${x.kind === 'compute' ? '<span class="tag">GPU</span>' : ''}<span class="l">${x.latency != null ? x.latency + 'ms' : ''}</span></div>`).join('')}
     </div>`).join('');
@@ -1302,7 +1314,7 @@ PAGES.map = async () => {
       formatter: p => p.data?.g ? groupTip(p.data.g) : p.seriesType === 'lines' ? `${esc(data.hub.name)} → ${esc(p.data.g?.place || '')}` : esc(p.name || ''),
     },
     geo: {
-      map: S.mapView, roam: true, zoom: china ? 1.18 : 1.6, center: china ? [101.5, 35.8] : [96, 28], scaleLimit: { min: 0.8, max: 12 },
+      map: S.mapView, roam: true, zoom: china ? 1.12 : 1.6, center: china ? [99.5, 35.5] : [96, 28], scaleLimit: { min: 0.8, max: 12 },
       itemStyle: {
         areaColor: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: '#10265a' }, { offset: 1, color: '#081736' }] },
         borderColor: 'rgba(96,165,250,.55)', borderWidth: 0.8, shadowColor: 'rgba(56,189,248,.6)', shadowBlur: 14,
@@ -1318,7 +1330,11 @@ PAGES.map = async () => {
       { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
         effect: { show: true, period: 3.6, trailLength: 0.5, symbol: 'arrow', symbolSize: 7, color: '#bff0ff' },
         lineStyle: { color: lineColor, width: 1.3, opacity: 0.7, curveness: 0.28 },
-        data: remote.map(g => ({ coords: [hub, g.coord], g })) },
+        data: remote.filter(g => !g.servers.every(x => x.via_proxy)).map(g => ({ coords: [hub, g.coord], g })) },
+      { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
+        effect: { show: true, period: 4.5, trailLength: 0.3, symbol: 'circle', symbolSize: 4, color: '#e9d5ff' },
+        lineStyle: { color: '#b197fc', width: 1.4, opacity: 0.8, curveness: -0.3, type: 'dashed' },
+        data: remote.filter(g => g.servers.every(x => x.via_proxy)).map(g => ({ coords: [hub, g.coord], g })) },
       { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { brushType: 'stroke', scale: 4.5, period: 3.2 },
         symbolSize: d => d[2], showEffectOn: 'render',
         label: { show: true, position: 'right', distance: 8, formatter: p => `{n|${p.data.g.place}}  {c|${p.data.g.servers.length}}`,

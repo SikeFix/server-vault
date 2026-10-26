@@ -437,3 +437,31 @@ pre.out .err { color: #ff9b9b; }
 .mp-srv .tag { font-size: 10px; color: #c4b5fd; border: 1px solid rgba(196, 181, 253, .45); border-radius: 5px; padding: 0 4px; }
 .mp-srv .l { margin-left: auto; color: #6f8db8; font-size: 11px; }
 @media (max-width: 900px) { .map-panel { display: none; } }
+
+/* ---- 算力卡片 v2 ---- */
+.gpu-strip { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px;
+  background: linear-gradient(135deg, var(--violet-soft), rgba(34, 211, 238, .06)); border: 1px solid rgba(139, 92, 246, .18); }
+.gpu-head { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--violet); min-width: 0; }
+.gpu-head svg { width: 15px; height: 15px; }
+.gpu-head b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gpu-head span { margin-left: auto; font-size: 11px; color: var(--muted); background: var(--panel); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+.gpu-tiles { display: grid; gap: 5px; }
+.gt { background: var(--panel); border-radius: 8px; padding: 5px 6px 6px; border: 1px solid var(--line); min-width: 0; position: relative; overflow: hidden; }
+.gt-top { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); line-height: 1.2; }
+.gt-top em { font-style: normal; }
+.gt-u { font-size: 16px; font-weight: 700; line-height: 1.3; letter-spacing: -.3px; }
+.gt-u small { font-size: 10px; font-weight: 500; margin-left: 1px; color: var(--muted); }
+.gt-mem { height: 3px; background: var(--gray-soft); border-radius: 3px; overflow: hidden; }
+.gt-mem i { display: block; height: 100%; background: linear-gradient(90deg, #22d3ee, var(--violet)); }
+.gt.idle .gt-u { color: var(--muted); }
+.gt.busy .gt-u { color: var(--violet); }
+.gt.busy { border-color: rgba(139, 92, 246, .35); }
+.gt.warn .gt-u { color: var(--orange); }
+.gt.warn { border-color: rgba(229, 135, 11, .4); }
+.gt.crit .gt-u { color: var(--red); }
+.gt.crit { border-color: rgba(229, 72, 77, .45); box-shadow: 0 0 0 2px var(--red-soft); }
+.gpu-sum { display: flex; justify-content: space-between; gap: 6px; font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+.gpu-sum b { color: var(--text); font-weight: 600; }
+.mp-head em.vpn { color: #c4b5fd; border-color: rgba(196, 181, 253, .45); }
+.map-legend .ln { display: inline-block; width: 18px; height: 0; border-top: 2px solid #7dd3fc; }
+.map-legend .ln.vpn { border-top: 2px dashed #b197fc; }
