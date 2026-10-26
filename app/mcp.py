@@ -46,8 +46,9 @@ TOOLS = [
          "timeout": {"type": "integer"}, "sudo": {"type": "boolean"}}, "required": ["command"]}},
     {"name": "get_credentials", "scope": "secret", "description": "读取服务器明文登录凭据(密码/私钥),仅在必须时使用",
      "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
-    {"name": "rotate_password", "scope": "rotate", "description": "立即轮换服务器登录密码(生成强密码→chpasswd→验证→保存)",
-     "inputSchema": {"type": "object", "properties": {"server": _SERVER}, "required": ["server"]}},
+    {"name": "rotate_password", "scope": "rotate", "description": "立即轮换服务器凭据:target=password 轮换登录密码(自动选择 chpasswd/sudo/passwd),target=key 轮换 SSH 密钥",
+     "inputSchema": {"type": "object", "properties": {"server": _SERVER,
+                     "target": {"type": "string", "enum": ["password", "key"], "description": "默认 password"}}, "required": ["server"]}},
 ]
 
 
@@ -71,7 +72,7 @@ def _call(ctx, name, a):
     if name == "get_credentials":
         return agent.credentials(ctx, a["server"])
     if name == "rotate_password":
-        return agent.rotate(ctx, a["server"])
+        return agent.rotate(ctx, a["server"], a.get("target", "password"))
     raise ServiceError(f"未知工具: {name}", 404)
 
 

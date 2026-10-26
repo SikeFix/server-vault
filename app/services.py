@@ -134,7 +134,7 @@ def public(row) -> dict:
         "latency_ms": row["latency_ms"], "last_checked_at": row["last_checked_at"],
         "facts": json.loads(row["facts_json"] or "null"), "facts_at": row["facts_at"],
         "sites_at": row["sites_at"], "host_key_fp": row["host_key_fp"],
-        "proxy_command": row["proxy_command"], "source": row["source"],
+        "proxy_command": row["proxy_command"], "source": row["source"], "rotation_target": row["rotation_target"],
         "has_password": bool(row["password_enc"]), "has_key": bool(row["private_key_enc"]),
         "has_pending_password": bool(row["pending_password_enc"]),
         "ssh_command": f"ssh {'-p ' + str(row['port']) + ' ' if row['port'] != 22 else ''}{row['username']}@{row['host']}",
@@ -231,6 +231,7 @@ def save_server(data: dict, sid=None, actor="admin") -> dict:
         "provider": str(pick("provider", "")).strip(),
         "notes": str(pick("notes", "")),
         "proxy_command": str(pick("proxy_command", "")).strip(),
+        "rotation_target": pick("rotation_target", "password") if pick("rotation_target", "password") in ("password", "key") else "password",
         "rotation_enabled": 1 if pick("rotation_enabled", 0) else 0,
         "rotation_days": rotation_days,
         "updated_at": now_iso(),
@@ -561,15 +562,42 @@ def generate_password(length=None) -> str:
             return pw
 
 
-def _rotation_failed(row, actor, msg):
+def _rotation_failed(row, actor, msg, status=400):
     retry = (now_dt() + timedelta(hours=1)).isoformat() if row["rotation_enabled"] else None
     db.run("UPDATE servers SET rotation_status='failed', rotation_error=?, next_rotation_at=COALESCE(?, next_rotation_at) WHERE id=?",
            (msg[:500], retry, row["id"]))
     audit(actor, "rotate", row, msg, ok=False)
-    raise ServiceError(msg)
+    raise ServiceError(msg, status)
 
 
-def rotate_password(sid, actor="admin", new_password=None) -> dict:
+def _sudo_mode(client, current):
+    """探测非 root 账号的 sudo 能力:'nopasswd' 免密 / 'password' 需密码且可用 / None 不可用。"""
+    if ssh.run(client, "sudo -n true", 15)[0] == 0:
+        return "nopasswd"
+    if current and ssh.run(client, "sudo -S -p '' -k -v", 15, current + "\n")[0] == 0:
+        return "password"
+    return None
+
+
+NEED_CURRENT = 428
+
+
+def _finish_rotation(row, actor, ts, old_secret, history_reason, sets):
+    nxt = _next_rotation(ts, row["rotation_days"]) if row["rotation_enabled"] else None
+    with db.tx():
+        if old_secret:
+            db.run("INSERT INTO password_history(server_id,password_enc,reason,created_at) VALUES(?,?,?,?)",
+                   (row["id"], vault.encrypt(old_secret), f"{history_reason} ({actor})", ts))
+        db.run(f"""UPDATE servers SET {sets}, last_rotated_at=?, next_rotation_at=?, rotation_status='ok',
+                  rotation_error=NULL, updated_at=? WHERE id=?""", (ts, nxt, ts, row["id"]))
+        db.run("""DELETE FROM password_history WHERE server_id=? AND id NOT IN
+                  (SELECT id FROM password_history WHERE server_id=? ORDER BY id DESC LIMIT 20)""", (row["id"], row["id"]))
+    return nxt
+
+
+def rotate_password(sid, actor="admin", new_password=None, current_password=None) -> dict:
+    """轮换登录密码,按账号能力自动选择方式:
+    root → chpasswd;免密 sudo → sudo -n chpasswd;有密码的 sudo → sudo -S chpasswd;无 sudo → 交互式 passwd。"""
     lock = _server_lock(sid)
     if not lock.acquire(blocking=False):
         raise ServiceError("该服务器正在轮换中", 409)
@@ -577,50 +605,55 @@ def rotate_password(sid, actor="admin", new_password=None) -> dict:
         row = get_row(sid)
         c = creds(row)
         user = row["username"]
-        if new_password:
-            if len(new_password) < 8 or ":" in new_password or "\n" in new_password:
-                raise ServiceError("自定义密码至少 8 位,且不能包含冒号或换行")
-        if user != "root" and not row["use_sudo"]:
-            _rotation_failed(row, actor, "非 root 账号需要开启 sudo 才能轮换密码")
-        if user != "root" and not c["password"]:
-            _rotation_failed(row, actor, "sudo 需要当前密码,但未保存密码")
+        if new_password and (len(new_password) < 8 or ":" in new_password or "\n" in new_password):
+            raise ServiceError("自定义密码至少 8 位,且不能包含冒号或换行")
+        current = current_password or c["password"]
         new = new_password or generate_password()
         # 预写:先把新密码加密落库,任何中断都不会丢失新密码
         db.run("UPDATE servers SET pending_password_enc=? WHERE id=?", (vault.encrypt(new), sid))
         try:
-            client = open_ssh(row)
+            client = open_ssh(row, password=current_password)
         except Exception as e:
             db.run("UPDATE servers SET pending_password_enc=NULL WHERE id=?", (sid,))
             _rotation_failed(row, actor, f"连接失败: {e}")
+        method = "chpasswd"
         try:
             if user == "root":
                 code, out, err, _ = ssh.run(client, "chpasswd", 30, f"{user}:{new}\n")
             else:
-                code, out, err, _ = ssh.run(client, "sudo -S -p '' chpasswd", 30, f"{c['password']}\n{user}:{new}\n")
+                mode = _sudo_mode(client, current)
+                if mode == "nopasswd":
+                    method = "sudo -n chpasswd"
+                    code, out, err, _ = ssh.run(client, "sudo -n chpasswd", 30, f"{user}:{new}\n")
+                elif mode == "password":
+                    method = "sudo chpasswd"
+                    code, out, err, _ = ssh.run(client, "sudo -S -p '' chpasswd", 30, f"{current}\n{user}:{new}\n")
+                elif current:
+                    method = "passwd"
+                    code, out = ssh.run_passwd(client, current, new)
+                    err = out
+                else:
+                    code = None
         finally:
             client.close()
+        if code is None:
+            db.run("UPDATE servers SET pending_password_enc=NULL WHERE id=?", (sid,))
+            _rotation_failed(row, actor, "该账号不是 root、没有免密 sudo,且未保存当前密码:请提供一次当前密码(成功后自动保存),"
+                                         "或改用「轮换 SSH 密钥」", NEED_CURRENT)
         if code != 0:
             db.run("UPDATE servers SET pending_password_enc=NULL WHERE id=?", (sid,))
-            _rotation_failed(row, actor, f"chpasswd 执行失败 (exit {code}): {(err or out).strip()[:300]}")
-        # chpasswd 成功即视为服务器密码已变更,立即提交
+            hint = "(当前密码可能不正确)" if method == "passwd" else ""
+            _rotation_failed(row, actor, f"{method} 执行失败{hint} (exit {code}): {(err or out).strip()[-300:]}")
+        # 修改成功即视为服务器密码已变更,立即提交
         ts = now_iso()
-        nxt = _next_rotation(ts, row["rotation_days"]) if row["rotation_enabled"] else None
-        with db.tx():
-            if c["password"]:
-                db.run("INSERT INTO password_history(server_id,password_enc,reason,created_at) VALUES(?,?,?,?)",
-                       (sid, row["password_enc"], f"轮换前旧密码 ({actor})", ts))
-            db.run("""UPDATE servers SET password_enc=pending_password_enc, pending_password_enc=NULL,
-                      last_rotated_at=?, next_rotation_at=?, rotation_status='ok', rotation_error=NULL, updated_at=?
-                      WHERE id=?""", (ts, nxt, ts, sid))
-            db.run("""DELETE FROM password_history WHERE server_id=? AND id NOT IN
-                      (SELECT id FROM password_history WHERE server_id=? ORDER BY id DESC LIMIT 20)""", (sid, sid))
-        # 验证新密码
+        nxt = _finish_rotation(row, actor, ts, current, "轮换前旧密码",
+                               "password_enc=pending_password_enc, pending_password_enc=NULL")
         verified, note = True, ""
         try:
             fresh = get_row(sid)
             if row["auth_type"] == "password":
                 open_ssh(fresh, password=new, use_key=False).close()
-            elif user != "root":
+            elif method == "sudo chpasswd":
                 cl = open_ssh(fresh)
                 try:
                     vcode, _, verr, _ = ssh.run(cl, "sudo -S -p '' -k true", 15, new + "\n")
@@ -632,15 +665,82 @@ def rotate_password(sid, actor="admin", new_password=None) -> dict:
         if not verified:
             db.run("UPDATE servers SET rotation_status='warn', rotation_error=? WHERE id=?",
                    (f"密码已修改,但新密码验证失败: {note}"[:500], sid))
-        audit(actor, "rotate", row, "新密码验证通过" if verified else f"已修改但验证失败: {note}", ok=verified)
-        return {"server_id": sid, "server": row["name"], "rotated_at": ts, "verified": verified,
-                "next_rotation_at": nxt, "message": "轮换成功" if verified else f"密码已修改,但验证失败: {note}"}
+        audit(actor, "rotate", row, f"[{method}] " + ("新密码验证通过" if verified else f"已修改但验证失败: {note}"), ok=verified)
+        return {"server_id": sid, "server": row["name"], "rotated_at": ts, "verified": verified, "method": method,
+                "next_rotation_at": nxt, "message": f"轮换成功({method})" if verified else f"密码已修改,但验证失败: {note}"}
     finally:
         lock.release()
 
 
+def rotate_key(sid, actor="admin") -> dict:
+    """轮换 SSH 密钥:生成 Ed25519 → 追加到 authorized_keys → 用新密钥验证登录 → 移除本系统此前签发的旧公钥。
+    不会删除非本系统签发的公钥(例如你本机自己的 id_rsa)。"""
+    lock = _server_lock(sid)
+    if not lock.acquire(blocking=False):
+        raise ServiceError("该服务器正在轮换中", 409)
+    try:
+        row = get_row(sid)
+        c = creds(row)
+        tag = f"server-vault#{sid}@"
+        priv, publine = ssh.generate_ed25519(tag + now_dt().strftime("%Y%m%d%H%M%S"))
+        db.run("UPDATE servers SET pending_key_enc=? WHERE id=?", (vault.encrypt(priv), sid))
+        add = f"""set -e
+umask 077
+mkdir -p ~/.ssh
+f=~/.ssh/authorized_keys
+touch "$f"
+if [ -n "$(tail -c1 "$f")" ]; then echo >> "$f"; fi
+echo {shlex.quote(publine)} >> "$f"
+"""
+        try:
+            client = open_ssh(row)
+        except Exception as e:
+            db.run("UPDATE servers SET pending_key_enc=NULL WHERE id=?", (sid,))
+            _rotation_failed(row, actor, f"连接失败: {e}")
+        try:
+            code, out, err, _ = ssh.run(client, "sh -s", 30, add)
+        finally:
+            client.close()
+        if code != 0:
+            db.run("UPDATE servers SET pending_key_enc=NULL WHERE id=?", (sid,))
+            _rotation_failed(row, actor, f"写入 authorized_keys 失败: {(err or out).strip()[:300]}")
+        # 用新密钥登录验证,通过后才切换并清理旧的本系统公钥
+        try:
+            cl = ssh.connect(row["host"], row["port"], row["username"], pkey_text=priv, known_host_key=row["host_key"],
+                             timeout=15, proxy_command=row["proxy_command"] or None)
+        except Exception as e:
+            _rotation_failed(row, actor, f"新公钥已写入,但新密钥登录验证失败(仍使用旧密钥): {e}")
+        try:
+            pub_b64 = publine.split()[1]
+            clean = f"""f=~/.ssh/authorized_keys
+t=$(mktemp)
+grep -v -F {shlex.quote(tag)} "$f" > "$t" || true
+grep -F {shlex.quote(pub_b64)} "$f" >> "$t"
+grep -q -F {shlex.quote(pub_b64)} "$t" && cat "$t" > "$f"
+rm -f "$t"
+"""
+            ccode, _, cerr, _ = ssh.run(cl, "sh -s", 30, clean)
+        finally:
+            cl.close()
+        ts = now_iso()
+        nxt = _finish_rotation(row, actor, ts, c["private_key"], "轮换前旧私钥",
+                               "private_key_enc=pending_key_enc, pending_key_enc=NULL, key_passphrase_enc=NULL, auth_type='key'")
+        note = "" if ccode == 0 else f"(清理旧公钥失败: {cerr.strip()[:200]})"
+        audit(actor, "rotate.key", row, f"新密钥 {ssh.fingerprint(ssh.load_pkey(priv))} 已启用{note}", ok=ccode == 0)
+        return {"server_id": sid, "server": row["name"], "rotated_at": ts, "verified": True, "method": "ssh-key",
+                "next_rotation_at": nxt, "message": f"SSH 密钥轮换成功{note}"}
+    finally:
+        lock.release()
+
+
+def rotate(sid, actor="admin"):
+    """按服务器配置的轮换对象执行轮换(自动任务使用)。"""
+    row = get_row(sid)
+    return rotate_key(sid, actor) if row["rotation_target"] == "key" else rotate_password(sid, actor)
+
+
 def rotate_many(rows, actor="admin"):
-    return run_many(rows, lambda r: rotate_password(r["id"], actor), workers=8)
+    return run_many(rows, lambda r: rotate(r["id"], actor), workers=8)
 
 
 # ---------------- 自动化任务 ----------------

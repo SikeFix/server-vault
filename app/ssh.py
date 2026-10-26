@@ -92,6 +92,50 @@ def connect(host, port, username, password=None, pkey_text=None, passphrase=None
     return client
 
 
+def generate_ed25519(comment):
+    """生成新的 Ed25519 密钥对,返回 (OpenSSH 私钥文本, authorized_keys 公钥行)。"""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    key = ed25519.Ed25519PrivateKey.generate()
+    priv = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                             serialization.NoEncryption()).decode()
+    pub = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
+    return priv, f"{pub} {comment}"
+
+
+def run_passwd(client, current, new, timeout=30):
+    """在 PTY 中驱动交互式 passwd(无 root / sudo 权限的账号用),返回 (exit_code, 输出)。"""
+    chan = client.get_transport().open_session(timeout=10)
+    chan.get_pty(term="vt100", width=200, height=24)
+    chan.settimeout(timeout)
+    chan.exec_command("LC_ALL=C LANG=C passwd")
+    buf, handled = "", 0
+    deadline = time.time() + timeout
+    while True:
+        if chan.recv_ready():
+            buf += chan.recv(4096).decode("utf-8", "replace")
+            pending = buf[handled:].rstrip().lower()
+            last = pending.splitlines()[-1].strip() if pending else ""
+            if last.endswith(":"):
+                if "current" in last or "old" in last or "(current)" in last:
+                    chan.sendall((current + "\n").encode())
+                elif "retype" in last or "again" in last or "re-enter" in last or "new" in last:
+                    chan.sendall((new + "\n").encode())
+                else:
+                    continue
+                handled = len(buf)
+            continue
+        if chan.exit_status_ready():
+            break
+        if time.time() > deadline:
+            chan.close()
+            return -1, buf + "\n[超时]"
+        time.sleep(0.05)
+    code = chan.recv_exit_status()
+    chan.close()
+    return code, buf
+
+
 def run(client, command, timeout=60, stdin_data=None, max_bytes=1_000_000):
     """执行命令,返回 (exit_code, stdout, stderr, timed_out)。"""
     chan = client.get_transport().open_session(timeout=10)

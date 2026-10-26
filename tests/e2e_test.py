@@ -140,6 +140,43 @@ def run_tests(mock2_stop, data_dir):
     s = c.get(f"/api/servers/{bad['id']}").json()
     ok(s["rotation_status"] == "failed" and not s["has_pending_password"], "失败状态记录且不残留待生效密码")
 
+    print("[6b] 非 root 账号 / SSH 密钥轮换")
+    sys.path.insert(0, str(ROOT))
+    from app.ssh import generate_ed25519
+    mk = lambda name, user, **kw: c.post("/api/servers", json={"name": name, "host": "127.0.0.1", "port": 2222,
+                                                                 "username": user, "group_name": "其他", **kw}).json()
+    ops = mk("ops-06", "ops", password="OpsPass#1")
+    r = c.post(f"/api/servers/{ops['id']}/rotate").json()
+    ok(r["method"] == "sudo -n chpasswd" and r["verified"] and mock_sshd.USERS["ops"] != "OpsPass#1", "免密 sudo → sudo -n chpasswd")
+    dev = mk("dev-07", "dev", password="DevPass#1")
+    r = c.post(f"/api/servers/{dev['id']}/rotate").json()
+    ok(r["method"] == "passwd" and r["verified"], f"无 sudo → 交互式 passwd ({r['message']})")
+    ok(c.get(f"/api/servers/{dev['id']}/secret").json()["password"] == mock_sshd.USERS["dev"] != "DevPass#1", "passwd 修改后保险库一致")
+    priv, pub = generate_ed25519("my-laptop")
+    ak = mock_sshd.home("keyuser") / ".ssh" / "authorized_keys"
+    ak.write_text(pub + "\n")
+    ku = mk("key-08", "keyuser", auth_type="key", private_key=priv)
+    ok(c.post("/api/check", json={"ids": [ku["id"]]}).json()[0]["status"] == "online", "仅密钥账号在线")
+    r = c.post(f"/api/servers/{ku['id']}/rotate")
+    ok(r.status_code == 428, "未保存密码且无 sudo → 428 请求当前密码")
+    r = c.post(f"/api/servers/{ku['id']}/rotate", json={"current_password": "wrong"})
+    ok(r.status_code == 400 and mock_sshd.USERS["keyuser"] == "KeyUser#1", "当前密码错误 → 失败且密码未变")
+    r = c.post(f"/api/servers/{ku['id']}/rotate", json={"current_password": "KeyUser#1"}).json()
+    sec = c.get(f"/api/servers/{ku['id']}/secret").json()
+    ok(r["method"] == "passwd" and sec["password"] == mock_sshd.USERS["keyuser"] != "KeyUser#1", "提供一次当前密码后轮换并保存")
+    ok(c.post(f"/api/servers/{ku['id']}/rotate").json()["verified"], "之后无需再输入当前密码")
+    c.post(f"/api/servers/{ku['id']}/rotate-key").raise_for_status()
+    t1 = ak.read_text()
+    k1 = c.get(f"/api/servers/{ku['id']}/secret").json()["private_key"]
+    ok("my-laptop" in t1 and t1.count("server-vault#") == 1 and k1 != priv, "密钥轮换:新增本系统公钥,保留用户自己的公钥")
+    c.post(f"/api/servers/{ku['id']}/rotate-key").raise_for_status()
+    t2 = ak.read_text()
+    old_b64 = next(l.split()[1] for l in t1.splitlines() if "server-vault#" in l)
+    ok("my-laptop" in t2 and t2.count("server-vault#") == 1 and old_b64 not in t2, "再次轮换:旧的本系统公钥被移除")
+    ok(c.post("/api/check", json={"ids": [ku["id"]]}).json()[0]["status"] == "online", "新密钥可登录")
+    hist = c.get(f"/api/servers/{ku['id']}/history").json()
+    ok(sum("PRIVATE KEY" in h["password"] for h in hist) == 2, "旧私钥归档到历史")
+
     print("[7] 自动化任务")
     a = c.post("/api/automations", json={"name": "巡检", "script": "echo check-$(whoami)", "target_type": "group",
                                          "target_value": ["生产", "测试"], "interval_minutes": 0}).json()

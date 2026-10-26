@@ -230,7 +230,13 @@ def scan_sites(sid: int):
 
 @api.post("/servers/{sid}/rotate")
 def rotate(sid: int, payload: dict = Body(default={})):
-    return S.rotate_password(sid, new_password=payload.get("password") or None)
+    return S.rotate_password(sid, new_password=payload.get("password") or None,
+                             current_password=payload.get("current_password") or None)
+
+
+@api.post("/servers/{sid}/rotate-key")
+def rotate_key(sid: int):
+    return S.rotate_key(sid)
 
 
 @api.post("/rotate")
@@ -375,8 +381,8 @@ def ag_credentials(ref: str, ctx=Depends(agent_ctx)):
 
 
 @ag.post("/servers/{ref}/rotate")
-def ag_rotate(ref: str, ctx=Depends(agent_ctx)):
-    return agent.rotate(ctx, ref)
+def ag_rotate(ref: str, target: str = "password", ctx=Depends(agent_ctx)):
+    return agent.rotate(ctx, ref, target)
 
 
 app.include_router(ag)

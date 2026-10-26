@@ -54,7 +54,7 @@ async function api(path, { method = 'GET', body } = {}) {
     boot();
     throw new Error(data?.detail || '会话已失效');
   }
-  if (!res.ok) throw new Error(data?.detail || `请求失败 (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data?.detail || `请求失败 (${res.status})`), { status: res.status });
   return data;
 }
 
@@ -588,7 +588,7 @@ async function serverForm(s = null) {
       <div class="field full keyf"><label>私钥 ${s?.has_key ? '<span class="muted">(已保存,留空则不修改)</span>' : ''}</label>
         <textarea class="input mono" name="private_key" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></div>
       <div class="field keyf"><label>私钥口令</label><input class="input" name="key_passphrase" type="password" placeholder="无则留空"></div>
-      <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="use_sudo" ${s?.use_sudo ? 'checked' : ''}>非 root 账号使用 sudo</label></div>
+      <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="use_sudo" ${s?.use_sudo ? 'checked' : ''}>执行命令默认使用 sudo</label></div>
       <div class="field full"><label>代理 / 跳板(ProxyCommand,可选)</label><input class="input mono" name="proxy_command" value="${v('proxy_command')}" placeholder="例如 /usr/bin/nc -X 5 -x 127.0.0.1:1080 %h %p 或 ssh -W %h:%p jump-host"></div>
       <div class="section-title">位置与描述</div>
       <div class="field"><label>位置 / 机房</label><input class="input" name="location" value="${v('location')}" placeholder="如:杭州 · 阿里云华东1(留空则自动识别 IP 归属地)"></div>
@@ -598,6 +598,8 @@ async function serverForm(s = null) {
       <div class="section-title">密码自动轮换</div>
       <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="rotation_enabled" ${s?.rotation_enabled ? 'checked' : ''}>开启定期自动轮换</label></div>
       <div class="field"><label>轮换周期(天)</label><input class="input" name="rotation_days" type="number" min="1" value="${v('rotation_days', 30)}"></div>
+      <div class="field full"><label>自动轮换对象</label><select class="input" name="rotation_target">
+        <option value="password">登录密码</option><option value="key" ${s?.rotation_target === 'key' ? 'selected' : ''}>SSH 密钥(适合只用密钥登录的账号)</option></select></div>
     </form>`,
     foot: `<button class="btn" id="cancel">取消</button><button class="btn primary" id="save">${s ? '保存' : '添加'}</button>`,
   });
@@ -815,12 +817,16 @@ function tabCreds(s, body) {
         ['SSH 命令', `<span class="mono">${esc(s.ssh_command)}</span> <button class="btn sm ghost" data-copy="${esc(s.ssh_command)}">复制</button>`],
         ['连接', '<button class="btn sm primary" id="cTerm">Web 终端</button>']])}
       <div id="keyBox" style="margin-top:10px"></div></div>
-    <div class="card card-pad"><h3>密码轮换</h3>
-      ${kv([['状态', rotMsg], ['自动轮换', s.rotation_enabled ? `<span class="badge green">已开启</span> 每 ${s.rotation_days} 天` : '<span class="badge">未开启</span>'],
+    <div class="card card-pad"><h3><span class="ic">${ICON.key}凭据轮换</span></h3>
+      ${kv([['状态', rotMsg], ['自动轮换', s.rotation_enabled ? `<span class="badge green">已开启</span> 每 ${s.rotation_days} 天轮换${s.rotation_target === 'key' ? ' SSH 密钥' : '登录密码'}` : '<span class="badge">未开启</span>'],
         ['上次轮换', s.last_rotated_at ? `${fmtTime(s.last_rotated_at)} <span class="muted">(${relTime(s.last_rotated_at)})</span>` : ''],
         ['下次轮换', s.next_rotation_at ? `${fmtTime(s.next_rotation_at)} <span class="muted">(${relTime(s.next_rotation_at)})</span>` : '']])}
-      <div class="hint" style="margin:10px 0">流程:生成强密码 → 预写入保险库 → SSH 执行 chpasswd${s.username !== 'root' ? '(sudo)' : ''} → 用新密码验证登录 → 旧密码归档</div>
-      <div class="row"><button class="btn primary" id="rotNow">立即轮换</button><button class="btn" id="rotCustom">指定新密码</button><button class="btn" id="rotPolicy">轮换策略</button></div></div>
+      <div class="hint" style="margin:10px 0">${s.username === 'root'
+        ? '密码:生成强密码 → 预写入保险库 → chpasswd → 验证登录 → 旧密码归档'
+        : '密码:自动选择方式 —— 免密 sudo / 带密码 sudo → chpasswd;无 sudo → 交互式 passwd(需当前密码,只需提供一次)'}<br>
+        密钥:生成 Ed25519 → 追加到 authorized_keys → 新密钥验证登录 → 仅移除本系统之前签发的公钥(不会动你自己的 id_rsa)</div>
+      <div class="row"><button class="btn primary" id="rotNow">轮换密码</button><button class="btn" id="rotKey">${ICON.key}轮换 SSH 密钥</button>
+        <button class="btn" id="rotCustom">指定新密码</button><button class="btn ghost" id="rotPolicy">轮换策略</button></div></div>
     <div class="card card-pad" style="grid-column:1/-1"><h3>历史密码 <button class="btn sm" id="loadHist">查看历史</button></h3>
       <div id="hist" class="muted small">出于安全考虑,历史密码需点击后加载(会记录审计日志)</div></div>
   </div>`;
@@ -838,14 +844,38 @@ function tabCreds(s, body) {
   const sk = $('#showKey', body);
   if (sk) sk.onclick = e => busy(e.currentTarget, async () => { $('#keyBox', body).innerHTML = codeBox((await getSecret()).private_key || ''); });
   $('#cTerm', body).onclick = () => openTerminal(s.id);
-  const doRotate = async (btn, password) => busy(btn, async () => {
-    const r = await api(`/servers/${s.id}/rotate`, { method: 'POST', body: password ? { password } : {} });
-    toast(r.message, r.verified ? 'ok' : 'error');
-    await renderDetail(); loadServers();
-  });
+  const doRotate = async (btn, password, current_password) => {
+    btn?.classList.add('loading');
+    try {
+      const r = await api(`/servers/${s.id}/rotate`, { method: 'POST', body: { password, current_password } });
+      toast(r.message, r.verified ? 'ok' : 'error');
+      await renderDetail(); loadServers();
+    } catch (e) {
+      if (e.status !== 428) { toast(e.message, 'error'); renderDetail(); return; }
+      const m = modal({ title: '需要当前密码', body: `<div class="muted small" style="margin-bottom:10px;line-height:1.7">
+          「${esc(s.username)}」不是 root,且没有免密 sudo,修改密码需要验证一次当前密码。<br>
+          验证通过后,新密码会自动保存,以后的轮换(包括定时自动轮换)都不再需要输入。</div>
+        <input class="input mono" type="password" id="curPw" placeholder="${esc(s.username)} 的当前登录密码" autocomplete="off">`,
+        foot: '<button class="btn" id="cc">取消</button><button class="btn primary" id="cok">验证并轮换</button>' });
+      $('#curPw', m).focus();
+      $('#cc', m).onclick = m.close;
+      const go = () => { const v = $('#curPw', m).value; if (!v) return; m.close(); doRotate(btn, password, v); };
+      $('#cok', m).onclick = go;
+      $('#curPw', m).onkeydown = ev => { if (ev.key === 'Enter') go(); };
+    } finally { btn?.classList.remove('loading'); }
+  };
+  $('#rotKey', body).onclick = async e => {
+    const btn = e.currentTarget;
+    if (!await confirmBox(`为「${s.name}」的 ${s.username} 生成新的 SSH 密钥?\n新公钥写入 authorized_keys 并验证登录成功后才会切换,本系统之前签发的旧公钥会被移除。`, { ok: '轮换密钥' })) return;
+    busy(btn, async () => {
+      const r = await api(`/servers/${s.id}/rotate-key`, { method: 'POST' });
+      toast(r.message, 'ok');
+      await renderDetail(); loadServers();
+    });
+  };
   $('#rotNow', body).onclick = async e => {
     const btn = e.currentTarget;
-    if (await confirmBox(`立即轮换「${s.name}」的 ${s.username} 密码?`, { ok: '立即轮换' })) doRotate(btn);
+    if (await confirmBox(`立即轮换「${s.name}」的 ${s.username} 登录密码?`, { ok: '立即轮换' })) doRotate(btn);
   };
   $('#rotCustom', body).onclick = () => {
     const m = modal({ title: '指定新密码轮换', body: `<div class="row" style="flex-wrap:nowrap"><input class="input mono" id="np" placeholder="至少 8 位,不能包含冒号">
@@ -857,11 +887,14 @@ function tabCreds(s, body) {
   $('#rotPolicy', body).onclick = () => serverForm(s);
   $('#loadHist', body).onclick = e => busy(e.currentTarget, async () => {
     const h = await api(`/servers/${s.id}/history`);
-    $('#hist', body).innerHTML = h.length ? `<table class="tbl"><thead><tr><th>时间</th><th>说明</th><th>密码</th><th></th></tr></thead><tbody>
-      ${h.map(x => `<tr style="cursor:default"><td>${fmtTime(x.created_at)}</td><td>${esc(x.reason)}</td>
-        <td><span class="secret" data-pw="${esc(x.password)}">••••••••</span></td>
-        <td><button class="btn sm ghost" data-reveal>显示</button><button class="btn sm ghost" data-copy="${esc(x.password)}">复制</button></td></tr>`).join('')}
-      </tbody></table>` : '暂无历史密码';
+    $('#hist', body).innerHTML = h.length ? `<table class="tbl"><thead><tr><th>时间</th><th>说明</th><th>凭据</th><th></th></tr></thead><tbody>
+      ${h.map(x => {
+        const isKey = x.password.includes('PRIVATE KEY');
+        return `<tr style="cursor:default"><td>${fmtTime(x.created_at)}</td><td>${esc(x.reason)}</td>
+        <td>${isKey ? '<span class="badge violet">SSH 私钥</span>' : `<span class="secret" data-pw="${esc(x.password)}">••••••••</span>`}</td>
+        <td>${isKey ? '' : '<button class="btn sm ghost" data-reveal>显示</button>'}<button class="btn sm ghost" data-copy="${esc(x.password)}">复制</button></td></tr>`;
+      }).join('')}
+      </tbody></table>` : '暂无历史记录';
     $$('[data-reveal]', body).forEach(b => b.onclick = () => { const sp = $('[data-pw]', b.closest('tr')); sp.textContent = sp.textContent.startsWith('•') ? sp.dataset.pw : '••••••••'; });
   });
 }

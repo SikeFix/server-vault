@@ -42,7 +42,7 @@ def _due(meta_key, interval_seconds) -> bool:
 
 def _rotate(sid):
     try:
-        S.rotate_password(sid, actor="system")
+        S.rotate(sid, actor="system")
     except S.ServiceError as e:
         log.warning("自动轮换失败 #%s: %s", sid, e)
 

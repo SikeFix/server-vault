@@ -102,9 +102,10 @@ def credentials(ctx, ref):
     return S.reveal(S.resolve(ref, ctx.groups)["id"], actor=ctx.actor)
 
 
-def rotate(ctx, ref):
+def rotate(ctx, ref, target="password"):
     ctx.need("rotate")
-    return S.rotate_password(S.resolve(ref, ctx.groups)["id"], actor=ctx.actor)
+    sid = S.resolve(ref, ctx.groups)["id"]
+    return S.rotate_key(sid, actor=ctx.actor) if target == "key" else S.rotate_password(sid, actor=ctx.actor)
 
 
 def whoami(ctx):
