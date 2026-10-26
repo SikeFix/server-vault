@@ -14,6 +14,26 @@ const ICON = {
   list: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
   lock: svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  grid: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  rows: svg('<path d="M3 6h18M3 12h18M3 18h18"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+  pin: svg('<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'),
+  cpu: svg('<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>'),
+  key: svg('<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M14 9l2 2"/>'),
+  check: svg('<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>'),
+  x: svg('<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6M15 9l-6 6"/>'),
+  alert: svg('<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>'),
+  sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+  monitor: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  download: svg('<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>'),
+  refresh: svg('<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  terminal: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>'),
+  activity: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
+  globe: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  shield: svg('<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3z"/>'),
+  disk: svg('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
 };
 
 const STATUS = {
@@ -133,6 +153,18 @@ document.addEventListener('click', e => {
   if (b) { e.stopPropagation(); copy(b.dataset.copy); }
 });
 
+/* ================= 主题 ================= */
+const THEME_LABEL = { auto: '跟随系统', light: '浅色', dark: '深色' };
+function themePref() { try { return localStorage.getItem('sv_theme') || 'auto'; } catch { return 'auto'; } }
+function applyTheme() {
+  const t = themePref();
+  const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  return t;
+}
+applyTheme();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+
 /* ================= 启动 / 解锁 ================= */
 async function boot() {
   const st = await api('/state');
@@ -145,14 +177,15 @@ function renderLock(st) {
   document.querySelectorAll('.mask,.modal,.drawer').forEach(e => e.remove());
   const init = !st.initialized;
   root.innerHTML = `<div class="lock-page"><form class="lock-card" id="lockForm">
-    <div class="brand-logo" style="width:46px;height:46px;color:#fff">${ICON.lock}</div>
-    <h2>${init ? '初始化保险库' : '解锁 Server Vault'}</h2>
+    <div class="brand-logo">${ICON.lock}</div>
+    <h2>${init ? '创建你的服务器保险库' : '欢迎回来'}</h2>
     <div class="muted small">${init
-      ? '首次使用,请设置主密码(至少 8 位)。所有服务器凭据都用主密码派生的 AES-256 密钥加密,主密码无法找回,请妥善保管。'
-      : '输入主密码解锁。解锁后 Web 管理端与 Agent 服务即可访问凭据。'}</div>
+      ? '设置主密码(至少 8 位)。所有服务器凭据都用主密码派生的 AES-256 密钥加密,主密码无法找回,请妥善保管。'
+      : '输入主密码解锁 Server Vault。解锁后 Web 管理端与 Agent 服务即可访问凭据。'}</div>
     <input class="input" type="password" name="pw" placeholder="主密码" autocomplete="current-password" required>
     ${init ? '<input class="input" type="password" name="pw2" placeholder="再次输入主密码" required>' : ''}
     <button class="btn primary">${init ? '创建保险库' : '解锁'}</button>
+    <div class="lock-feats"><span>AES-256-GCM</span><span>·</span><span>密码自动轮换</span><span>·</span><span>MCP Agent 服务</span></div>
   </form></div>`;
   const f = $('#lockForm');
   f.pw.focus();
@@ -178,12 +211,20 @@ const NAV = [
 function renderShell() {
   root.innerHTML = `<div class="app">
     <aside class="side">
-      <div class="brand"><div class="brand-logo">${ICON.lock}</div><span>Server Vault</span></div>
-      <nav class="nav">${NAV.map(n => `<a href="#${n.id}" data-id="${n.id}" title="${n.label}">${ICON[n.icon]}<span>${n.label}</span></a>`).join('')}</nav>
-      <div class="side-foot"><div class="row"><span class="dot green"></span>保险库已解锁</div>
-        <button class="btn sm lock-btn" id="lockBtn">锁定保险库</button></div>
+      <div class="brand"><div class="brand-logo">${ICON.lock}</div><div><b>Server Vault</b><small>服务器保险库</small></div></div>
+      <div class="nav-title">导航</div>
+      <nav class="nav">${NAV.map(n => `<a href="#${n.id}" data-id="${n.id}" title="${n.label}">${ICON[n.icon]}<span>${n.label}</span>${n.id === 'servers' ? '<em class="count" id="navCount"></em>' : ''}</a>`).join('')}</nav>
+      <div class="side-foot"><div class="row"><span class="dot green pulse"></span>保险库已解锁</div>
+        <div class="btns"><button class="btn sm" id="themeBtn"></button><button class="btn sm" id="lockBtn">${ICON.lock}锁定</button></div></div>
     </aside>
     <main class="main" id="main"></main></div>`;
+  const syncTheme = () => { const t = themePref(); $('#themeBtn').innerHTML = `${t === 'dark' ? ICON.moon : t === 'light' ? ICON.sun : ICON.monitor}${THEME_LABEL[t]}`; };
+  syncTheme();
+  $('#themeBtn').onclick = () => {
+    const order = ['auto', 'light', 'dark'];
+    try { localStorage.setItem('sv_theme', order[(order.indexOf(themePref()) + 1) % 3]); } catch { }
+    applyTheme(); syncTheme();
+  };
   $('#lockBtn').onclick = async () => {
     if (!await confirmBox('锁定后 Web 会话与所有 Agent 访问都将被拒绝,需要重新输入主密码解锁。', { ok: '锁定' })) return;
     await api('/lock', { method: 'POST' });
@@ -200,20 +241,36 @@ function route() {
 window.addEventListener('hashchange', () => $('.app') && route());
 
 /* ================= 服务器列表 ================= */
+function osBadge(os) {
+  const o = (os || '').toLowerCase();
+  const map = [['ubuntu', 'Ub', '#e95420'], ['debian', 'De', '#c70036'], ['centos', 'Ce', '#932279'], ['rocky', 'Ro', '#10b981'],
+    ['alma', 'Al', '#0f4266'], ['alibaba', 'Ali', '#ff6a00'], ['anolis', 'An', '#ff6a00'], ['tencentos', 'TS', '#0052d9'],
+    ['opencloudos', 'OC', '#0052d9'], ['red hat', 'RH', '#ee0000'], ['fedora', 'Fe', '#51a2da'], ['openeuler', 'oE', '#c7000b'],
+    ['kylin', 'Ky', '#1e5bb8'], ['uos', 'UOS', '#1677ff'], ['arch', 'Ar', '#1793d1'], ['alpine', 'Ap', '#0d597f'],
+    ['suse', 'Su', '#30ba78'], ['amazon', 'AL', '#ff9900'], ['macos', 'Mac', '#1f2937'], ['windows', 'Win', '#0078d4']];
+  const hit = map.find(([k]) => o.includes(k));
+  const [, t, c] = hit || [null, os ? os.slice(0, 2) : ICON.server, '#94a3b8'];
+  return `<div class="os" style="background:${c}" title="${esc(os || '未采集系统信息')}">${t}</div>`;
+}
+
 PAGES.servers = async () => {
+  S.view = S.view || (() => { try { return localStorage.getItem('sv_view') || 'card'; } catch { return 'card'; } })();
   $('#main').innerHTML = `
     <div class="page-head">
       <div><h1>服务器</h1><div class="sub">集中管理凭据、硬件配置、运行状态与网站</div></div>
       <div class="row">
-        <button class="btn" id="importBtn">批量导入</button>
-        <button class="btn" id="checkAllBtn">全部检测</button>
-        <button class="btn primary" id="addBtn">+ 新增服务器</button>
+        <button class="btn" id="localBtn">${ICON.download}从本机 SSH 导入</button>
+        <button class="btn" id="importBtn">CSV 导入</button>
+        <button class="btn" id="checkAllBtn">${ICON.refresh}全部检测</button>
+        <button class="btn primary" id="addBtn">${ICON.plus}新增服务器</button>
       </div>
     </div>
     <div class="grid c5" id="stats"></div>
-    <div class="card" style="margin-top:14px"><div id="toolbar"></div><div class="table-wrap" id="tableWrap"></div></div>`;
+    <div class="card" id="toolbarCard" style="margin:16px 0"><div id="toolbar"></div></div>
+    <div id="tableWrap"></div>`;
   $('#addBtn').onclick = () => serverForm();
   $('#importBtn').onclick = importDialog;
+  $('#localBtn').onclick = localImportDialog;
   $('#checkAllBtn').onclick = e => busy(e.currentTarget, async () => {
     const res = await api('/check', { method: 'POST', body: {} });
     toast(`检测完成:${res.filter(r => r.status === 'online').length}/${res.length} 在线`, 'ok');
@@ -226,6 +283,8 @@ async function loadServers() {
   S.servers = await api('/servers');
   const ids = new Set(S.servers.map(s => s.id));
   S.selected = new Set([...S.selected].filter(i => ids.has(i)));
+  const nc = $('#navCount');
+  if (nc) nc.textContent = S.servers.length || '';
   if (!$('#tableWrap')) return;
   renderStats(); renderToolbar(); renderTable();
 }
@@ -234,23 +293,34 @@ function renderStats() {
   const c = st => S.servers.filter(s => st.includes(s.status)).length;
   const soon = Date.now() + 7 * 86400e3;
   const rot = S.servers.filter(s => s.rotation_status === 'failed' || (s.rotation_enabled && s.next_rotation_at && new Date(s.next_rotation_at) < soon)).length;
-  const items = [['服务器总数', S.servers.length, ''], ['在线', c(['online']), 'green'], ['离线', c(['offline']), 'red'],
-    ['异常', c(['auth_failed', 'error', 'hostkey_mismatch']), 'orange'], ['7 天内轮换 / 失败', rot, '']];
-  $('#stats').innerHTML = items.map(([l, v, cls]) => `<div class="card stat ${cls}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('');
+  const total = S.servers.length, online = c(['online']);
+  const items = [
+    ['服务器总数', total, 'indigo', ICON.server, `<div class="ratio"><i style="width:${total ? online / total * 100 : 0}%"></i></div>`, total ? `<small>在线率 ${Math.round(online / total * 100)}%</small>` : ''],
+    ['在线', online, 'green', ICON.check, '', ''],
+    ['离线', c(['offline']), 'red', ICON.x, '', ''],
+    ['异常', c(['auth_failed', 'error', 'hostkey_mismatch']), 'orange', ICON.alert, '', ''],
+    ['7 天内轮换 / 失败', rot, 'violet', ICON.key, '', ''],
+  ];
+  $('#stats').innerHTML = items.map(([l, v, cls, ic, extra, small]) => `<div class="card stat">
+    <div class="ic ${cls}">${ic}</div><div><div class="label">${l}</div><div class="val">${v}${small}</div></div>${extra}</div>`).join('');
 }
 
 function filtered() {
   const q = S.q.toLowerCase();
+  const rank = { online: 0, error: 1, auth_failed: 1, hostkey_mismatch: 1, unknown: 2, offline: 3 };
   return S.servers.filter(s => (!S.group || s.group_name === S.group) && (!S.status || s.status === S.status) &&
-    (!q || [s.name, s.host, s.group_name, s.location, s.provider, s.tags.join(' '), s.facts?.os, s.facts?.model, geoText(s.facts?.geo)]
-      .join(' ').toLowerCase().includes(q)));
+    (!q || [s.name, s.host, s.group_name, s.location, s.provider, s.tags.join(' '), s.facts?.os, s.facts?.model, s.facts?.cloud, geoText(s.facts?.geo)]
+      .join(' ').toLowerCase().includes(q)))
+    .sort((x, y) => (rank[x.status] ?? 2) - (rank[y.status] ?? 2) || x.group_name.localeCompare(y.group_name) || x.name.localeCompare(y.name));
 }
 
 function renderToolbar() {
   const tb = $('#toolbar');
+  const card = $('#toolbarCard');
   const n = S.selected.size;
   if (n) {
-    tb.className = 'toolbar batchbar';
+    card.style.background = 'var(--primary-soft)';
+    tb.className = 'toolbar';
     tb.innerHTML = `<b>已选 ${n} 台</b><span class="grow"></span>
       <button class="btn sm" data-b="check">检测状态</button>
       <button class="btn sm" data-b="facts">采集配置</button>
@@ -261,15 +331,25 @@ function renderToolbar() {
     $$('[data-b]', tb).forEach(b => b.onclick = () => batchAction(b.dataset.b, b));
     return;
   }
-  const groups = [...new Set(S.servers.map(s => s.group_name))];
+  card.style.background = '';
+  const counts = {};
+  S.servers.forEach(s => counts[s.group_name] = (counts[s.group_name] || 0) + 1);
   tb.className = 'toolbar';
-  tb.innerHTML = `<input class="input" id="q" placeholder="搜索名称 / IP / 位置 / 系统 / 型号" style="width:280px" value="${esc(S.q)}">
-    <select class="input" id="fGroup"><option value="">全部分组</option>${groups.map(g => `<option ${g === S.group ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>
+  tb.innerHTML = `<div class="search"><span>${ICON.search}</span><input class="input" id="q" placeholder="搜索名称 / IP / 位置 / 系统 / 云厂商" style="width:270px" value="${esc(S.q)}"></div>
+    <div class="chips"><span class="chip ${!S.group ? 'active' : ''}" data-g="">全部 <span class="n">${S.servers.length}</span></span>
+      ${Object.entries(counts).map(([g, k]) => `<span class="chip ${g === S.group ? 'active' : ''}" data-g="${esc(g)}">${esc(g)} <span class="n">${k}</span></span>`).join('')}</div>
+    <span class="grow"></span>
     <select class="input" id="fStatus"><option value="">全部状态</option>${Object.entries(STATUS).map(([k, [t]]) => `<option value="${k}" ${k === S.status ? 'selected' : ''}>${t}</option>`).join('')}</select>
-    <span class="grow"></span><button class="btn sm ghost" id="reload">刷新</button>`;
+    <div class="seg"><button data-v="card" class="${S.view === 'card' ? 'active' : ''}">${ICON.grid}卡片</button><button data-v="table" class="${S.view === 'table' ? 'active' : ''}">${ICON.rows}列表</button></div>
+    <button class="btn sm ghost" id="reload" title="刷新">${ICON.refresh}</button>`;
   $('#q').oninput = e => { S.q = e.target.value; renderTable(); };
-  $('#fGroup').onchange = e => { S.group = e.target.value; renderTable(); };
+  $$('[data-g]', tb).forEach(c => c.onclick = () => { S.group = c.dataset.g; renderToolbar(); renderTable(); });
   $('#fStatus').onchange = e => { S.status = e.target.value; renderTable(); };
+  $$('[data-v]', tb).forEach(b => b.onclick = () => {
+    S.view = b.dataset.v;
+    try { localStorage.setItem('sv_view', S.view); } catch { }
+    renderToolbar(); renderTable();
+  });
   $('#reload').onclick = loadServers;
 }
 
@@ -281,39 +361,123 @@ function rotationCell(s) {
   return `<div>每 ${s.rotation_days} 天 ${badge}</div><div class="sub">下次 ${relTime(s.next_rotation_at)}</div>`;
 }
 
+const locText = s => s.location || geoText(s.facts?.geo);
+const provText = s => s.provider || s.facts?.cloud || s.facts?.geo?.isp || '';
+const diskTotal = f => (f.disks || []).reduce((a, x) => a + (x.size || 0), 0);
+const meterBar = p => p == null ? '<div class="bar"></div>' : `<div class="bar ${p >= 90 ? 'crit' : p >= 75 ? 'warn' : ''}"><i style="width:${Math.min(p, 100)}%"></i></div>`;
+
+function srvCard(s) {
+  const f = s.facts || {}, d = s.status_detail || {};
+  const [, color] = STATUS[s.status] || ['', ''];
+  const disk = diskTotal(f);
+  const rot = s.rotation_status === 'failed' ? '<span class="badge red">轮换失败</span>' : s.rotation_enabled ? `<span class="badge violet" title="下次 ${fmtTime(s.next_rotation_at)}">${ICON.key}${relTime(s.next_rotation_at)}</span>` : '';
+  return `<div class="srv st-${s.status} ${S.selected.has(s.id) ? 'sel' : ''}" data-id="${s.id}">
+    <div class="srv-top">${osBadge(f.os)}
+      <div style="min-width:0;flex:1"><div class="row" style="gap:7px;flex-wrap:nowrap"><span class="dot ${color} ${s.status === 'online' ? 'pulse' : ''}"></span><span class="srv-name">${esc(s.name)}</span></div>
+        <div class="srv-host">${esc(s.username)}@${esc(s.host)}${s.port !== 22 ? ':' + s.port : ''}</div></div>
+      <input type="checkbox" class="srv-check" data-stop ${S.selected.has(s.id) ? 'checked' : ''}></div>
+    <div class="srv-meta">
+      <div>${ICON.pin}<b>${esc(locText(s) || '位置未知')}</b>${provText(s) ? `<span>· ${esc(provText(s))}</span>` : ''}</div>
+      <div>${ICON.cpu}<span>${esc(f.os || '尚未采集系统信息')}${f.model ? ' · ' + esc(f.model) : ''}</span></div>
+    </div>
+    ${f.cpu_cores ? `<div class="specs"><span class="spec"><b>${f.cpu_cores}</b> 核</span><span class="spec"><b>${fmtBytes(f.mem_total)}</b> 内存</span>
+      ${disk ? `<span class="spec"><b>${fmtBytes(disk)}</b> 磁盘</span>` : ''}${s.proxy_command ? '<span class="spec">经代理</span>' : ''}</div>` : ''}
+    ${d.mem_pct != null || d.disk_pct != null
+      ? `<div class="meters"><span>内存</span>${meterBar(d.mem_pct)}<span>${d.mem_pct ?? '—'}%</span><span>磁盘</span>${meterBar(d.disk_pct)}<span>${d.disk_pct ?? '—'}%</span></div>`
+      : d.error ? `<div class="small" style="color:var(--${color || 'muted'});overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.error)}">${esc(d.error)}</div>` : ''}
+    <div class="srv-foot"><span class="badge">${esc(s.group_name)}</span>${d.load ? `<span title="负载">${ICON.activity}${esc(d.load.split(' ')[0])}</span>` : ''}${rot}
+      <span class="grow"></span>${s.latency_ms != null ? `<span>${s.latency_ms} ms</span>` : ''}
+      <button class="btn sm" data-term data-stop>${ICON.terminal}终端</button></div>
+  </div>`;
+}
+
 function renderTable() {
   const rows = filtered();
   const wrap = $('#tableWrap');
   if (!rows.length) {
-    wrap.innerHTML = `<div class="empty">${S.servers.length ? '没有匹配的服务器' : '还没有服务器 —— 点击右上角「新增服务器」或「批量导入」开始'}</div>`;
+    wrap.innerHTML = `<div class="card empty">${ICON.server}${S.servers.length ? '没有匹配的服务器' : '还没有服务器 —— 点击右上角「从本机 SSH 导入」一键导入 ~/.ssh/config,或手动新增'}</div>`;
+    return;
+  }
+  const toggle = (id, on) => { on ? S.selected.add(id) : S.selected.delete(id); renderToolbar(); renderTable(); };
+  if (S.view === 'card') {
+    wrap.innerHTML = `<div class="srv-grid">${rows.map(srvCard).join('')}</div>`;
+    $$('.srv', wrap).forEach(el => {
+      const id = +el.dataset.id;
+      el.onclick = e => { if (!e.target.closest('[data-stop]')) openDetail(id); };
+      $('.srv-check', el).onchange = e => toggle(id, e.target.checked);
+      $('[data-term]', el).onclick = () => openTerminal(id);
+    });
     return;
   }
   const all = rows.every(s => S.selected.has(s.id));
-  wrap.innerHTML = `<table class="tbl wide"><thead><tr>
+  wrap.innerHTML = `<div class="card table-wrap"><table class="tbl wide"><thead><tr>
       <th style="width:34px"><input type="checkbox" id="selAll" ${all ? 'checked' : ''}></th>
-      <th>状态</th><th>名称</th><th>地址</th><th>位置</th><th>型号 / 系统</th><th>配置</th><th>负载</th><th>密码轮换</th><th></th>
+      <th>状态</th><th>名称</th><th>地址</th><th>位置</th><th>系统 / 型号</th><th>配置</th><th>负载</th><th>密码轮换</th><th></th>
     </tr></thead><tbody>${rows.map(s => {
       const f = s.facts || {}, d = s.status_detail || {};
-      const disk = (f.disks || []).reduce((a, x) => a + (x.size || 0), 0);
+      const disk = diskTotal(f);
       return `<tr data-id="${s.id}" class="${S.selected.has(s.id) ? 'sel' : ''}">
         <td data-stop><input type="checkbox" class="sel" ${S.selected.has(s.id) ? 'checked' : ''}></td>
         <td>${statusBadge(s.status)}<div class="sub">${s.latency_ms != null ? s.latency_ms + ' ms' : ''}</div></td>
-        <td><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.group_name)}${s.tags.map(t => ` · ${esc(t)}`).join('')}</div></td>
+        <td><div class="row" style="flex-wrap:nowrap">${osBadge(f.os)}<div><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.group_name)}${s.tags.map(t => ` · ${esc(t)}`).join('')}</div></div></div></td>
         <td class="mono">${esc(s.username)}@${esc(s.host)}${s.port !== 22 ? ':' + s.port : ''}</td>
-        <td>${esc(s.location || geoText(f.geo) || '—')}<div class="sub">${esc(s.provider || f.geo?.isp || '')}</div></td>
-        <td>${esc(f.model || f.virt || '—')}<div class="sub">${esc(f.os || '')}</div></td>
+        <td>${esc(locText(s) || '—')}<div class="sub">${esc(provText(s))}</div></td>
+        <td class="clip">${esc(f.os || '—')}<div class="sub">${esc(f.model || f.virt || '')}</div></td>
         <td>${f.cpu_cores ? f.cpu_cores + ' 核' : '—'} / ${f.mem_total ? fmtBytes(f.mem_total) : '—'}<div class="sub">${disk ? '磁盘 ' + fmtBytes(disk) : ''}</div></td>
         <td>${esc(d.load || '—')}<div class="sub clip" title="${esc(d.error || '')}">${d.mem_pct != null ? `内存 ${d.mem_pct}% · 磁盘 ${d.disk_pct ?? '—'}%` : esc(d.error || '')}</div></td>
         <td>${rotationCell(s)}</td>
-        <td data-stop><button class="btn sm" data-term>终端</button></td>
+        <td data-stop><button class="btn sm" data-term>${ICON.terminal}终端</button></td>
       </tr>`;
-    }).join('')}</tbody></table>`;
+    }).join('')}</tbody></table></div>`;
   $('#selAll').onchange = e => { rows.forEach(s => e.target.checked ? S.selected.add(s.id) : S.selected.delete(s.id)); renderToolbar(); renderTable(); };
   $$('tbody tr', wrap).forEach(tr => {
     const id = +tr.dataset.id;
     tr.onclick = e => { if (!e.target.closest('[data-stop]')) openDetail(id); };
-    $('.sel', tr).onchange = e => { e.target.checked ? S.selected.add(id) : S.selected.delete(id); renderToolbar(); renderTable(); };
+    $('.sel', tr).onchange = e => toggle(id, e.target.checked);
     $('[data-term]', tr).onclick = () => openTerminal(id);
+  });
+}
+
+async function localImportDialog() {
+  const m = modal({
+    title: '从本机 SSH 配置导入', wide: true,
+    body: '<div class="empty">正在解析 ~/.ssh/config …</div>',
+    foot: '<span class="muted small grow" id="liCount"></span><button class="btn" id="liCancel">取消</button><button class="btn primary" id="liGo">导入选中</button>',
+  });
+  $('#liCancel', m).onclick = m.close;
+  let items;
+  try { items = await api('/import/local'); } catch (e) { $('.modal-body', m).innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const body = $('.modal-body', m);
+  body.innerHTML = `<div class="muted small" style="margin-bottom:12px">通过 <span class="mono">ssh -G</span> 解析每个 Host 的最终配置(含 ProxyCommand / Match)。私钥在本机服务端读取后直接加密入库;主机指纹取自 <span class="mono">~/.ssh/known_hosts</span>,首次连接即校验。</div>
+    <div class="import-list"><table class="tbl"><thead><tr><th><input type="checkbox" id="liAll"></th><th>别名</th><th>地址</th><th>分组</th><th>连接</th><th>私钥</th><th>主机指纹</th></tr></thead><tbody>
+    ${items.map((x, i) => `<tr style="cursor:default;${x.exists ? 'opacity:.5' : ''}">
+      <td><input type="checkbox" data-i="${i}" ${x.exists ? 'disabled' : x.key_path ? 'checked' : ''}></td>
+      <td><b>${esc(x.alias)}</b>${x.exists ? ' <span class="badge">已存在</span>' : ''}</td>
+      <td class="mono small">${esc(x.username)}@${esc(x.host)}${x.port !== 22 ? ':' + x.port : ''}</td>
+      <td><span class="badge ${x.group === '内网' ? 'cyan' : 'blue'}">${esc(x.group)}</span></td>
+      <td>${x.proxy_command ? `<span class="badge orange" title="${esc(x.proxy_command)}">代理</span>` : '<span class="muted small">直连</span>'}</td>
+      <td class="small">${x.key_path ? `<span class="mono">${esc(x.key_path)}</span>` : `<span style="color:var(--orange)">${esc(x.key_note)}</span>`}</td>
+      <td class="small">${x.host_key_fp ? '<span class="badge green">已信任</span>' : '<span class="muted">首次连接记录</span>'}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  const boxes = $$('[data-i]', body);
+  const sync = () => { $('#liCount', m).textContent = `已选 ${boxes.filter(b => b.checked).length} / ${items.length} 台`; };
+  boxes.forEach(b => b.onchange = sync);
+  $('#liAll', body).onchange = e => { boxes.forEach(b => { if (!b.disabled) b.checked = e.target.checked; }); sync(); };
+  sync();
+  $('#liGo', m).onclick = e => busy(e.currentTarget, async () => {
+    const aliases = boxes.filter(b => b.checked).map(b => items[+b.dataset.i].alias);
+    if (!aliases.length) return toast('请至少选择一台', 'error');
+    const r = await api('/import/local', { method: 'POST', body: { aliases } });
+    m.close();
+    toast(`已导入 ${r.created.length} 台${r.errors.length ? `,失败 ${r.errors.length} 台` : ''},正在检测状态并采集配置…`, r.errors.length ? 'error' : 'ok');
+    await loadServers();
+    const ids = S.servers.filter(s => r.created.includes(s.name)).map(s => s.id);
+    if (!ids.length) return;
+    const res = await api('/check', { method: 'POST', body: { ids } });
+    await loadServers();
+    const online = res.filter(x => x.status === 'online').map(x => x.server_id);
+    toast(`检测完成:${online.length}/${ids.length} 在线,正在采集配置…`, 'ok');
+    if (online.length) { await api('/facts', { method: 'POST', body: { ids: online } }); await loadServers(); toast('配置信息采集完成', 'ok'); }
   });
 }
 
@@ -425,6 +589,7 @@ async function serverForm(s = null) {
         <textarea class="input mono" name="private_key" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></div>
       <div class="field keyf"><label>私钥口令</label><input class="input" name="key_passphrase" type="password" placeholder="无则留空"></div>
       <div class="field" style="align-self:end"><label class="check"><input type="checkbox" name="use_sudo" ${s?.use_sudo ? 'checked' : ''}>非 root 账号使用 sudo</label></div>
+      <div class="field full"><label>代理 / 跳板(ProxyCommand,可选)</label><input class="input mono" name="proxy_command" value="${v('proxy_command')}" placeholder="例如 /usr/bin/nc -X 5 -x 127.0.0.1:1080 %h %p 或 ssh -W %h:%p jump-host"></div>
       <div class="section-title">位置与描述</div>
       <div class="field"><label>位置 / 机房</label><input class="input" name="location" value="${v('location')}" placeholder="如:杭州 · 阿里云华东1(留空则自动识别 IP 归属地)"></div>
       <div class="field"><label>服务商</label><input class="input" name="provider" value="${v('provider')}" placeholder="阿里云 / 腾讯云 / 自建 IDC"></div>
@@ -482,13 +647,15 @@ async function renderDetail() {
   const i = S.servers.findIndex(x => x.id === s.id);
   if (i >= 0) S.servers[i] = s;
   const TABS = [['overview', '概览'], ['sites', '网站与端口'], ['creds', '凭据与轮换'], ['exec', '执行命令'], ['logs', '操作日志']];
+  const f = s.facts || {};
   d.innerHTML = `<div class="drawer-head">
-      <div class="row" style="align-items:flex-start">
-        <div class="grow"><div class="row"><h2 style="margin:0;font-size:19px">${esc(s.name)}</h2>${statusBadge(s.status)}
+      <div class="drawer-title">${osBadge(f.os)}
+        <div class="grow" style="min-width:0"><div class="row"><h2>${esc(s.name)}</h2>${statusBadge(s.status)}
           ${s.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('')}</div>
-          <div class="muted small mono" style="margin-top:3px">${esc(s.username)}@${esc(s.host)}:${s.port} · ${esc(s.group_name)}</div></div>
-        <button class="btn sm primary" id="dTerm">打开终端</button>
-        <button class="btn sm" id="dCheck">检测</button>
+          <div class="muted small" style="margin-top:3px"><span class="mono">${esc(s.username)}@${esc(s.host)}:${s.port}</span> · ${esc(s.group_name)}
+            ${locText(s) ? ` · ${esc(locText(s))}` : ''}${provText(s) ? ` · ${esc(provText(s))}` : ''}${s.proxy_command ? ' · 经代理连接' : ''}</div></div>
+        <button class="btn sm primary" id="dTerm">${ICON.terminal}打开终端</button>
+        <button class="btn sm" id="dCheck">${ICON.refresh}检测</button>
         <button class="btn sm" id="dEdit">编辑</button>
         <button class="btn sm danger" id="dDel">删除</button>
         <button class="x" id="dClose">×</button>
@@ -522,35 +689,42 @@ const kv = pairs => `<dl class="kv">${pairs.filter(p => p).map(([k, v]) => `<dt>
 function tabOverview(s, body) {
   const f = s.facts || {}, d = s.status_detail || {}, g = f.geo || {};
   const hasFacts = !!s.facts;
+  const metric = (l, v) => `<div class="metric"><div class="l">${l}</div><div class="v">${v}</div></div>`;
   body.innerHTML = `
+    <div class="hero-metrics">
+      ${metric('延迟', s.latency_ms != null ? `${s.latency_ms}<span class="small muted"> ms</span>` : '—')}
+      ${metric('负载 (1/5/15)', esc(d.load || '—'))}
+      ${metric('内存使用', d.mem_pct != null ? `${d.mem_pct}%${meterBar(d.mem_pct)}` : '—')}
+      ${metric('根分区', d.disk_pct != null ? `${d.disk_pct}%${meterBar(d.disk_pct)}` : '—')}
+    </div>
     ${hasFacts ? '' : `<div class="card card-pad" style="margin-bottom:14px;background:var(--primary-soft);border-color:#d9e0ff">
       <div class="row"><div class="grow"><b>尚未采集配置信息</b><div class="small muted">通过 SSH 读取 CPU、内存、磁盘、厂商型号、系统版本与 IP 归属地</div></div>
       <button class="btn primary" data-facts>立即采集</button></div></div>`}
     <div class="grid c2">
-      <div class="card card-pad"><h3>实时状态 <span class="muted small">${s.last_checked_at ? '检测于 ' + relTime(s.last_checked_at) : ''}</span></h3>
+      <div class="card card-pad"><h3><span class="ic">${ICON.activity}实时状态</span> <span class="muted small">${s.last_checked_at ? '检测于 ' + relTime(s.last_checked_at) : ''}</span></h3>
         ${kv([['状态', statusBadge(s.status) + (d.error ? `<div class="small" style="color:var(--red);margin-top:4px">${esc(d.error)}</div>` : '')],
           ['延迟', s.latency_ms != null ? s.latency_ms + ' ms' : ''], ['负载', esc(d.load || '')],
           ['内存使用', d.mem_pct != null ? pctBar(d.mem_pct) : ''], ['根分区', d.disk_pct != null ? pctBar(d.disk_pct) : ''],
           ['运行时长', d.uptime_s ? fmtUptime(d.uptime_s) : '']])}</div>
-      <div class="card card-pad"><h3>位置信息</h3>
-        ${kv([['位置 / 机房', esc(s.location)], ['服务商', esc(s.provider)], ['IP 归属地', esc(geoText(g))],
+      <div class="card card-pad"><h3><span class="ic">${ICON.globe}位置信息</span></h3>
+        ${kv([['位置 / 机房', esc(s.location)], ['服务商', esc(s.provider || f.cloud || '')], ['IP 归属地', esc(geoText(g))],
           ['公网 IP', esc(g.ip || '')], ['运营商', esc(g.isp || '')], ['组织 / AS', esc([g.org, g.as].filter(Boolean).join(' · '))]])}</div>
-      <div class="card card-pad"><h3>硬件配置</h3>
+      <div class="card card-pad"><h3><span class="ic">${ICON.cpu}硬件配置</span></h3>
         ${kv([['服务器型号', esc(f.model || '')], ['厂商', esc(f.vendor || '')], ['产品名称', esc(f.product || '')], ['序列号', esc(f.serial || '')],
           ['主板', esc(f.board || '')], ['虚拟化', esc(f.virt && f.virt !== 'none' ? f.virt : f.virt === 'none' ? '物理机' : '')],
           ['CPU', esc(f.cpu_model || '')], ['核心数', f.cpu_cores ? `${f.cpu_cores} 核${f.cpu_sockets > 1 ? ` · ${f.cpu_sockets} 路` : ''}` : ''],
           ['内存', f.mem_total ? fmtBytes(f.mem_total) + (f.mem_available ? ` <span class="muted">(可用 ${fmtBytes(f.mem_available)})</span>` : '') : ''],
           ['Swap', f.swap_total != null ? fmtBytes(f.swap_total) : '']])}</div>
-      <div class="card card-pad"><h3>系统信息</h3>
+      <div class="card card-pad"><h3><span class="ic">${ICON.server}系统信息</span></h3>
         ${kv([['主机名', esc(f.hostname || '')], ['操作系统', esc(f.os || '')], ['内核', esc(f.kernel || '')], ['架构', esc(f.arch || '')],
           ['时区', esc(f.timezone || '')], ['进程数', f.processes ?? ''], ['Docker', esc(f.docker || '')],
           ['内网 IP', esc((f.ips || []).join('  '))]])}</div>
-      <div class="card card-pad" style="grid-column:1/-1"><h3>磁盘</h3>
+      <div class="card card-pad" style="grid-column:1/-1"><h3><span class="ic">${ICON.disk}磁盘</span></h3>
         ${(f.disks || []).length ? `<table class="tbl"><thead><tr><th>挂载点</th><th>容量</th><th>已用</th><th style="width:40%">使用率</th></tr></thead><tbody>
           ${f.disks.map(x => `<tr style="cursor:default"><td class="mono">${esc(x.mount)}</td><td>${fmtBytes(x.size)}</td><td>${fmtBytes(x.used)}</td><td>${pctBar(x.pct)}</td></tr>`).join('')}
           </tbody></table>` : '<div class="muted">—</div>'}</div>
-      <div class="card card-pad" style="grid-column:1/-1"><h3>其他</h3>
-        ${kv([['备注', esc(s.notes).replace(/\n/g, '<br>')], ['主机指纹', s.host_key_fp ? `<span class="mono">${esc(s.host_key_fp)}</span> <button class="btn sm ghost" id="resetFp">重置</button>` : '<span class="muted">首次连接时记录(TOFU),之后每次连接都会校验</span>'],
+      <div class="card card-pad" style="grid-column:1/-1"><h3><span class="ic">${ICON.shield}连接与安全</span></h3>
+        ${kv([['备注', esc(s.notes).replace(/\n/g, '<br>')], ['代理命令', s.proxy_command ? `<span class="mono">${esc(s.proxy_command)}</span>` : '直连'], ['主机指纹', s.host_key_fp ? `<span class="mono">${esc(s.host_key_fp)}</span> <button class="btn sm ghost" id="resetFp">重置</button>` : '<span class="muted">首次连接时记录(TOFU),之后每次连接都会校验</span>'],
           ['创建时间', fmtTime(s.created_at)], ['更新时间', fmtTime(s.updated_at)]])}</div>
     </div>
     <div class="row" style="margin-top:14px"><span class="muted small">配置采集于 ${s.facts_at ? fmtTime(s.facts_at) : '—'}</span><span class="grow"></span>
@@ -587,8 +761,10 @@ async function tabSites(s, body) {
     const nginx = data.nginx || [], apache = data.apache || [];
     const siteCard = x => {
       const domains = x.domains.filter(d => d && d !== '_');
-      const link = domains.find(d => !d.includes('*') && !d.startsWith('~') && d !== 'localhost');
+      const port = (x.listen || []).map(l => l.split(/\s+/)[0].split(':').pop()).find(p => /^\d+$/.test(p));
+      const host = domains.find(d => /^([a-z0-9-]+\.)+[a-z]{2,}$/i.test(d) || /^\d+(\.\d+){3}$/.test(d)) || s.host;
       const proto = x.ssl ? 'https' : 'http';
+      const link = `${host}${port && !['80', '443'].includes(port) ? ':' + port : ''}`;
       return `<div class="site"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">
           <div class="domains grow">${domains.length ? domains.map(esc).join('  ') : '<span class="muted">(默认站点)</span>'}</div>
           ${x.type === 'stream' ? '<span class="badge">TCP/UDP</span>' : ''}${x.type === 'apache' ? '<span class="badge blue">Apache</span>' : ''}

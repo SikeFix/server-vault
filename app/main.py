@@ -11,7 +11,7 @@ from fastapi import APIRouter, Body, Depends, FastAPI, Header, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, mcp, scheduler
+from . import agent, local_import, mcp, scheduler
 from . import services as S
 from .config import AUTO_UNLOCK_PASSWORD, BASE_DIR, STATIC_DIR, VERSION
 from .vault import VaultError, VaultLocked, vault
@@ -165,6 +165,16 @@ def delete_server(sid: int):
 @api.post("/servers/import")
 def import_servers(payload: dict = Body(...)):
     return S.import_servers(payload.get("csv", ""))
+
+
+@api.get("/import/local")
+def scan_local():
+    return local_import.scan()
+
+
+@api.post("/import/local")
+def import_local(payload: dict = Body(...)):
+    return local_import.import_aliases(payload.get("aliases") or [])
 
 
 @api.get("/groups")

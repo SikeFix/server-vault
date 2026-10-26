@@ -101,7 +101,8 @@ def parse_facts(text: str) -> dict:
             disks.append({"mount": parts[0], "size": _int(parts[1]), "used": _int(parts[2]),
                           "pct": _int(parts[3].rstrip("%"))})
     facts["disks"] = disks
-    facts["model"] = " ".join(x for x in (facts["vendor"], facts["product"]) if x and x.lower() not in ("none", "default string"))
+    vendor, product = (x if x.lower() not in ("none", "default string", "to be filled by o.e.m.") else "" for x in (facts["vendor"], facts["product"]))
+    facts["model"] = product if vendor and product.lower().startswith(vendor.lower()) else " ".join(x for x in (vendor, product) if x)
     return facts
 
 

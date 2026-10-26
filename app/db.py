@@ -107,8 +107,15 @@ class DB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         if new:
             os.chmod(path, 0o600)
+
+    def _migrate(self):
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(servers)")}
+        for col, ddl in (("proxy_command", "TEXT NOT NULL DEFAULT ''"), ("source", "TEXT NOT NULL DEFAULT ''")):
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE servers ADD COLUMN {col} {ddl}")
 
     def all(self, sql, params=()):
         with self.lock:

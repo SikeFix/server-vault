@@ -12,4 +12,4 @@ PORT = int(os.environ.get("SV_PORT", "8765"))
 # 可选:无人值守时用环境变量自动解锁保险库(让 Agent 在服务重启后无需人工解锁)
 AUTO_UNLOCK_PASSWORD = os.environ.get("SV_MASTER_PASSWORD")
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"

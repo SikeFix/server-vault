@@ -41,9 +41,23 @@ class _TrustOnFirstUse(paramiko.MissingHostKeyPolicy):
         pass
 
 
+def expand_proxy(cmd, host, port, user):
+    """展开 OpenSSH ProxyCommand 中的 %h %p %r %% 占位符。"""
+    out, i = [], 0
+    while i < len(cmd):
+        if cmd[i] == "%" and i + 1 < len(cmd):
+            out.append({"h": str(host), "p": str(port), "r": str(user), "%": "%"}.get(cmd[i + 1], cmd[i:i + 2]))
+            i += 2
+        else:
+            out.append(cmd[i])
+            i += 1
+    return "".join(out)
+
+
 def connect(host, port, username, password=None, pkey_text=None, passphrase=None,
-            known_host_key=None, timeout=10) -> paramiko.SSHClient:
-    """连接服务器。known_host_key 为 "类型 base64",已记录时在认证前校验,防止中间人窃取密码。"""
+            known_host_key=None, timeout=10, proxy_command=None) -> paramiko.SSHClient:
+    """连接服务器。known_host_key 为 "类型 base64",已记录时在认证前校验,防止中间人窃取密码。
+    proxy_command 与 OpenSSH 的 ProxyCommand 相同(如 nc -X 5 -x 127.0.0.1:1080 %h %p)。"""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(_TrustOnFirstUse())
     if known_host_key:
@@ -57,6 +71,8 @@ def connect(host, port, username, password=None, pkey_text=None, passphrase=None
     if password:
         kwargs["password"] = password
     try:
+        if proxy_command:
+            kwargs["sock"] = paramiko.ProxyCommand(expand_proxy(proxy_command, host, port, username))
         client.connect(**kwargs)
     except paramiko.BadHostKeyException:
         client.close()

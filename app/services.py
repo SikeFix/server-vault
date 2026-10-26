@@ -134,6 +134,7 @@ def public(row) -> dict:
         "latency_ms": row["latency_ms"], "last_checked_at": row["last_checked_at"],
         "facts": json.loads(row["facts_json"] or "null"), "facts_at": row["facts_at"],
         "sites_at": row["sites_at"], "host_key_fp": row["host_key_fp"],
+        "proxy_command": row["proxy_command"], "source": row["source"],
         "has_password": bool(row["password_enc"]), "has_key": bool(row["private_key_enc"]),
         "has_pending_password": bool(row["pending_password_enc"]),
         "ssh_command": f"ssh {'-p ' + str(row['port']) + ' ' if row['port'] != 22 else ''}{row['username']}@{row['host']}",
@@ -229,6 +230,7 @@ def save_server(data: dict, sid=None, actor="admin") -> dict:
         "location": str(pick("location", "")).strip(),
         "provider": str(pick("provider", "")).strip(),
         "notes": str(pick("notes", "")),
+        "proxy_command": str(pick("proxy_command", "")).strip(),
         "rotation_enabled": 1 if pick("rotation_enabled", 0) else 0,
         "rotation_days": rotation_days,
         "updated_at": now_iso(),
@@ -319,12 +321,22 @@ def reveal(sid, actor="admin") -> dict:
 
 def open_ssh(row, password=None, use_key=True, timeout=10):
     c = creds(row)
+    kwargs = dict(password=password or c["password"],
+                  pkey_text=c["private_key"] if use_key and row["auth_type"] == "key" else None,
+                  passphrase=c["key_passphrase"], known_host_key=row["host_key"], timeout=timeout,
+                  proxy_command=row["proxy_command"] or None)
     try:
-        client = ssh.connect(
-            row["host"], row["port"], row["username"],
-            password=password or c["password"],
-            pkey_text=c["private_key"] if use_key and row["auth_type"] == "key" else None,
-            passphrase=c["key_passphrase"], known_host_key=row["host_key"], timeout=timeout)
+        for attempt in range(3):
+            try:
+                client = ssh.connect(row["host"], row["port"], row["username"], **kwargs)
+                break
+            except (ssh.AuthFailed, ssh.HostKeyMismatch):
+                raise
+            except ssh.SSHError:
+                # 代理(如 VPN 的 SOCKS5)在并发高时偶尔会断开,稍等重试
+                if not row["proxy_command"] or attempt == 2:
+                    raise
+                time.sleep(0.6 * (attempt + 1))
     except ssh.HostKeyMismatch as e:
         db.run("UPDATE servers SET status='hostkey_mismatch', status_detail=?, last_checked_at=? WHERE id=?",
                (json.dumps({"error": str(e)}, ensure_ascii=False), now_iso(), row["id"]))
@@ -388,29 +400,44 @@ def run_many(rows, fn, workers=24):
         return list(pool.map(wrap, rows))
 
 
+def _explain(err, code):
+    """把常见的远程执行失败翻译成可操作的提示。"""
+    if "password has expired" in err.lower() or "password change required" in err.lower():
+        return "账号密码已过期,服务器拒绝执行命令。请用 Web 终端登录并按提示修改密码"
+    return (err.strip().splitlines() or [f"命令执行失败 (exit {code})"])[0][:300]
+
+
 def check_status(row) -> dict:
     detail, status, latency = {}, "offline", None
     t0 = time.time()
-    try:
-        socket.create_connection((row["host"], row["port"]), timeout=5).close()
-        latency = int((time.time() - t0) * 1000)
-    except OSError as e:
-        detail["error"] = f"端口不可达: {e}"
-    else:
+    reachable = True
+    if not row["proxy_command"]:
         try:
-            client = open_ssh(row, timeout=8)
+            socket.create_connection((row["host"], row["port"]), timeout=5).close()
+            latency = int((time.time() - t0) * 1000)
+        except OSError as e:
+            reachable, detail["error"] = False, f"端口不可达: {e}"
+    if reachable:
+        try:
+            client = open_ssh(row, timeout=10)
+            if latency is None:
+                latency = int((time.time() - t0) * 1000)
             try:
                 code, out, err, _ = ssh.run(client, "sh -s", 15, collectors.STATUS_SCRIPT)
             finally:
                 client.close()
-            detail = collectors.parse_status(out)
-            status = "online"
+            if code != 0 and not out.strip():
+                status, detail["error"] = "error", _explain(err, code)
+            else:
+                detail = collectors.parse_status(out)
+                status = "online"
         except ServiceError as e:
             status, detail["error"] = ("hostkey_mismatch" if e.status == 409 else "error"), str(e)
         except ssh.AuthFailed as e:
             status, detail["error"] = "auth_failed", str(e)
         except Exception as e:
-            status, detail["error"] = "error", str(e)
+            proxy_down = row["proxy_command"] and ("ProxyCommand" in str(e) or "closed" in str(e).lower())
+            status, detail["error"] = ("offline", f"经代理连接失败(VPN/代理是否已连接?): {e}") if proxy_down else ("error", str(e))
     ts = now_iso()
     db.run("UPDATE servers SET status=?, status_detail=?, latency_ms=?, last_checked_at=? WHERE id=?",
            (status, json.dumps(detail, ensure_ascii=False), latency, ts, row["id"]))
@@ -445,15 +472,40 @@ def geo_lookup(host) -> dict:
         return {"ip": ip}
 
 
+CLOUDS = [
+    (("alibaba", "aliyun", "alicloud"), "阿里云"), (("tencent",), "腾讯云"), (("huawei",), "华为云"),
+    (("baidu",), "百度智能云"), (("volcengine", "bytedance"), "火山引擎"), (("jdcloud", "jingdong"), "京东云"),
+    (("ucloud",), "UCloud"), (("ksyun", "kingsoft"), "金山云"), (("amazon", "aws", "ec2"), "AWS"),
+    (("google",), "Google Cloud"), (("microsoft", "azure"), "Azure"), (("oracle",), "Oracle Cloud"),
+    (("digitalocean",), "DigitalOcean"), (("vultr", "choopa", "constant"), "Vultr"), (("linode", "akamai"), "Linode"),
+    (("hetzner",), "Hetzner"), (("ovh",), "OVH"), (("china telecom", "chinanet"), "中国电信"),
+    (("china unicom", "unicom"), "中国联通"), (("china mobile",), "中国移动"),
+]
+
+
+def detect_cloud(facts) -> str:
+    """根据 DMI 厂商与 IP 归属组织推断云厂商 / 运营商。"""
+    g = facts.get("geo") or {}
+    for text in (facts.get("vendor", ""), facts.get("product", ""), g.get("org", ""), g.get("isp", ""), g.get("as", "")):
+        low = (text or "").lower()
+        for keys, name in CLOUDS:
+            if any(k in low for k in keys):
+                return name
+    return ""
+
+
 def collect_facts(row, actor="admin") -> dict:
     client = open_ssh(row)
     try:
         code, out, err, _ = ssh.run(client, "sh -s", 40, collectors.FACTS_SCRIPT)
     finally:
         client.close()
+    if code != 0 and not out.strip():
+        raise ServiceError(f"采集失败: {_explain(err, code)}")
     facts = collectors.parse_facts(out)
     if get_settings()["geo_lookup"]:
         facts["geo"] = geo_lookup(row["host"])
+    facts["cloud"] = detect_cloud(facts)
     ts = now_iso()
     db.run("UPDATE servers SET facts_json=?, facts_at=?, status='online', last_checked_at=? WHERE id=?",
            (json.dumps(facts, ensure_ascii=False), ts, ts, row["id"]))
@@ -465,6 +517,8 @@ def collect_sites(row, actor="admin") -> dict:
     client = open_ssh(row)
     try:
         code, out, err, _ = ssh.run(client, "sh -s", 60, collectors.SITES_SCRIPT)
+        if "@@END@@" not in out:
+            raise ServiceError(f"扫描失败: {_explain(err, code)}")
         sites = collectors.parse_sites(out)
         certs = sorted({s["cert"] for s in sites["nginx"] if s.get("cert")})[:60]
         if certs:
