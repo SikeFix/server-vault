@@ -46,6 +46,8 @@ DEFAULT_SETTINGS = {
     "password_length": 24,
     "default_rotation_days": 30,
     "geo_lookup": True,              # 通过 ip-api.com 查询公网 IP 归属地
+    "intranet_location": "湖南 · 湘潭",  # 内网 / 经代理服务器在地图上的位置
+    "intranet_coords": "112.9442,27.8297",  # 经度,纬度
     "exec_timeout": 60,
     "session_hours": 12,
     "agent_deny_patterns": [
@@ -489,13 +491,14 @@ def geo_lookup(host) -> dict:
     if addr.is_private or addr.is_loopback or addr.is_link_local:
         return {"ip": ip, "region": "内网地址"}
     try:
-        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp,org,as"
+        url = f"http://ip-api.com/json/{ip}?lang=zh-CN&fields=status,country,regionName,city,isp,org,as,lat,lon"
         with urllib.request.urlopen(url, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("status") != "success":
             return {"ip": ip}
         return {"ip": ip, "country": d.get("country", ""), "region": d.get("regionName", ""),
-                "city": d.get("city", ""), "isp": d.get("isp", ""), "org": d.get("org", ""), "as": d.get("as", "")}
+                "city": d.get("city", ""), "isp": d.get("isp", ""), "org": d.get("org", ""), "as": d.get("as", ""),
+                "lat": d.get("lat"), "lon": d.get("lon")}
     except Exception:
         return {"ip": ip}
 
@@ -582,6 +585,55 @@ def gpu_live(row, actor="admin") -> dict:
         raise ServiceError("未检测到 nvidia-smi / npu-smi(未安装驱动或不是算力服务器)")
     data["queried_at"] = now_iso()
     return data
+
+
+def map_data() -> dict:
+    """地图数据:内网 / 经代理的服务器统一定位到 intranet_location,公网服务器按 IP 归属地坐标。"""
+    st = get_settings()
+    try:
+        hub = [float(x) for x in st["intranet_coords"].split(",")][:2]
+    except Exception:
+        hub = [112.9442, 27.8297]
+    rows = list_rows()
+
+    def private(r):
+        try:
+            return ipaddress.ip_address(r["host"]).is_private
+        except ValueError:
+            return False
+
+    need = [r for r in rows if not (r["proxy_command"] or private(r))
+            and not ((json.loads(r["facts_json"] or "{}") or {}).get("geo") or {}).get("lat")]
+    if need and st["geo_lookup"]:
+        def fill(r):
+            g = geo_lookup(r["host"])
+            if g.get("lat") is not None:
+                f = json.loads(r["facts_json"] or "{}") or {}
+                f["geo"] = {**(f.get("geo") or {}), **g}
+                db.run("UPDATE servers SET facts_json=? WHERE id=?", (json.dumps(f, ensure_ascii=False), r["id"]))
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(fill, need))
+        rows = list_rows()
+    points = []
+    for r in rows:
+        f = json.loads(r["facts_json"] or "{}") or {}
+        g = f.get("geo") or {}
+        if r["proxy_command"] or private(r):
+            coord, place, intranet = hub, st["intranet_location"], True
+        elif g.get("lat") is not None:
+            coord = [g["lon"], g["lat"]]
+            place = r["location"] or " ".join(dict.fromkeys(x for x in (g.get("region"), g.get("city")) if x)) or g.get("country", "")
+            intranet = False
+        else:
+            continue
+        d = json.loads(r["status_detail"] or "{}") or {}
+        points.append({"id": r["id"], "name": r["name"], "host": r["host"], "status": r["status"], "kind": server_kind(r),
+                       "group": r["group_name"], "coord": coord, "place": place, "intranet": intranet,
+                       "isp": r["provider"] or f.get("cloud") or g.get("isp", ""), "os": f.get("os", ""),
+                       "gpu": f.get("gpu_summary", ""), "bt": f.get("bt_version", ""), "latency": r["latency_ms"],
+                       "load": d.get("load", "")})
+    return {"hub": {"name": st["intranet_location"], "coord": hub}, "points": points,
+            "unlocated": len(rows) - len(points)}
 
 
 def cleanup_expired(actor="system"):

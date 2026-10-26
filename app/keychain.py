@@ -21,8 +21,11 @@ def _q(s: str) -> str:
 def get():
     if not available():
         return None
-    p = subprocess.run(["security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
-                       capture_output=True, text=True, timeout=10)
+    try:
+        p = subprocess.run(["security", "find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"],
+                           capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return None
     return p.stdout.rstrip("\n") if p.returncode == 0 else None
 
 

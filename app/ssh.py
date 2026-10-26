@@ -5,7 +5,11 @@ import io
 import socket
 import time
 
+import logging
+
 import paramiko
+
+logging.getLogger("paramiko").setLevel(logging.CRITICAL)  # 连接失败已转成友好提示,不再打印内部堆栈
 
 
 class SSHError(Exception):
@@ -80,11 +84,19 @@ def connect(host, port, username, password=None, pkey_text=None, passphrase=None
     except paramiko.AuthenticationException:
         client.close()
         raise AuthFailed("认证失败(用户名/密码/私钥错误)")
+    except paramiko.ssh_exception.NoValidConnectionsError:
+        client.close()
+        raise SSHError(f"无法连接 {host}:{port}(端口未开放或网络不通;内网地址请选择经代理连接)")
+    except paramiko.ProxyCommandFailure as e:
+        client.close()
+        raise SSHError(f"代理连接失败(VPN / 代理是否已开启?):{e}")
     except (socket.timeout, TimeoutError):
         client.close()
         raise SSHError("连接超时")
     except (OSError, paramiko.SSHException, EOFError) as e:
         client.close()
+        if proxy_command and ("banner" in str(e).lower() or isinstance(e, EOFError)):
+            raise SSHError(f"经代理无法连接 {host}:{port}(目标端口不通,或 VPN / 代理未连接)")
         raise SSHError(f"连接失败: {e}")
     key = client.get_transport().get_remote_server_key()
     client.sv_host_key = f"{key.get_name()} {key.get_base64()}"
@@ -138,7 +150,7 @@ def run_passwd(client, current, new, timeout=30):
 
 def run(client, command, timeout=60, stdin_data=None, max_bytes=1_000_000):
     """执行命令,返回 (exit_code, stdout, stderr, timed_out)。"""
-    chan = client.get_transport().open_session(timeout=10)
+    chan = client.get_transport().open_session(timeout=30)
     chan.settimeout(timeout)
     chan.exec_command(command)
     if stdin_data is not None:

@@ -164,6 +164,7 @@ function applyTheme() {
   return t;
 }
 applyTheme();
+if (navigator.userAgent.includes('ServerVaultApp')) document.documentElement.classList.add('in-app');
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
 /* ================= 启动 / 解锁 ================= */
@@ -203,6 +204,7 @@ function renderLock(st) {
 
 const NAV = [
   { id: 'servers', label: '服务器', icon: 'server' },
+  { id: 'map', label: '服务器地图', icon: 'globe' },
   { id: 'automations', label: '自动化', icon: 'bolt' },
   { id: 'agents', label: 'Agent 接入', icon: 'bot' },
   { id: 'audit', label: '审计日志', icon: 'list' },
@@ -236,6 +238,7 @@ function renderShell() {
 const PAGES = {};
 function route() {
   const page = PAGES[location.hash.slice(1)] ? location.hash.slice(1) : 'servers';
+  if (S.chart) { S.chart.dispose(); S.chart = null; }
   $$('.nav a').forEach(a => a.classList.toggle('active', a.dataset.id === page));
   PAGES[page]().catch(e => toast(e.message, 'error'));
 }
@@ -341,14 +344,14 @@ function renderToolbar() {
   tb.innerHTML = `<div class="search"><span>${ICON.search}</span><input class="input" id="q" placeholder="搜索名称 / IP / 位置 / 系统 / 云厂商" style="width:270px" value="${esc(S.q)}"></div>
     <div class="chips"><span class="chip ${!S.group ? 'active' : ''}" data-g="">全部 <span class="n">${S.servers.length}</span></span>
       ${Object.entries(counts).map(([g, k]) => `<span class="chip ${g === S.group ? 'active' : ''}" data-g="${esc(g)}">${esc(g)} <span class="n">${k}</span></span>`).join('')}</div>
-    <span class="grow"></span>
+    <div class="tb-right">
     <div class="seg" id="kindSeg">${[['', '全部类型'], ['normal', '普通'], ['compute', '算力'], ['temp', '临时']].map(([k, l]) => {
       const n = k === '' ? S.servers.length : k === 'temp' ? S.servers.filter(x => x.temp_expires_at).length : S.servers.filter(x => x.kind === k).length;
       return `<button data-k="${k}" class="${S.kind === k ? 'active' : ''}">${l}${k ? ` <span class="small muted">${n}</span>` : ''}</button>`;
     }).join('')}</div>
     <select class="input" id="fStatus"><option value="">全部状态</option>${Object.entries(STATUS).map(([k, [t]]) => `<option value="${k}" ${k === S.status ? 'selected' : ''}>${t}</option>`).join('')}</select>
     <div class="seg"><button data-v="card" class="${S.view === 'card' ? 'active' : ''}">${ICON.grid}卡片</button><button data-v="table" class="${S.view === 'table' ? 'active' : ''}">${ICON.rows}列表</button></div>
-    <button class="btn sm ghost" id="reload" title="刷新">${ICON.refresh}</button>`;
+    <button class="btn sm ghost" id="reload" title="刷新">${ICON.refresh}</button></div>`;
   $('#q').oninput = e => { S.q = e.target.value; renderTable(); };
   $$('[data-g]', tb).forEach(c => c.onclick = () => { S.group = c.dataset.g; renderToolbar(); renderTable(); });
   $('#fStatus').onchange = e => { S.status = e.target.value; renderTable(); };
@@ -918,6 +921,13 @@ function quickAddDialog() {
           ${[1, 3, 7, 30].map(d => `<option value="${d}">临时:${d} 天后自动移除</option>`).join('')}</select></div>
         <div class="field"><label>服务器类型</label><select class="input" name="server_type"><option value="auto">自动识别(有 GPU 即为算力)</option>
           <option value="normal">普通服务器</option><option value="compute">算力服务器</option></select></div>
+        <div class="field"><label>连接方式</label><select class="input" name="proxy_mode">
+          <option value="auto">自动(按 ~/.ssh/config 规则,内网自动走代理)</option><option value="socks">经 SOCKS5 代理</option>
+          <option value="none">直连</option><option value="custom">自定义 ProxyCommand(跳板机等)</option></select></div>
+        <div class="field" id="qaProxyBox"><label id="qaProxyLabel">代理</label>
+          <input class="input mono" name="socks" value="127.0.0.1:1080" placeholder="127.0.0.1:1080">
+          <input class="input mono hidden" name="proxy_command" placeholder="ssh -W %h:%p 跳板机别名">
+          <div class="hint" id="qaProxyHint"></div></div>
         <div class="field full"><label class="check"><input type="checkbox" name="install_key" checked>安装本机 SSH 公钥(之后免密登录)</label>
           <label class="check" style="margin-left:18px"><input type="checkbox" name="write_config" checked>写入 ~/.ssh/config 与 known_hosts(终端可直接 ssh 名称)</label></div>
         <details class="full"><summary class="muted small" style="cursor:pointer">更多选项(名称 / 端口 / 用户名 / 分组,默认自动)</summary>
@@ -933,6 +943,14 @@ function quickAddDialog() {
   });
   const f = $('#qaf', m);
   let mode = 'one';
+  const syncProxy = () => {
+    const v = f.proxy_mode.value;
+    f.socks.classList.toggle('hidden', v !== 'socks');
+    f.proxy_command.classList.toggle('hidden', v !== 'custom');
+    $('#qaProxyLabel', m).textContent = v === 'socks' ? 'SOCKS5 代理地址' : v === 'custom' ? 'ProxyCommand' : '代理';
+    $('#qaProxyHint', m).textContent = v === 'auto' ? '与终端 ssh 行为一致:你配置里 10.* / 172.16-31.* 等内网段会自动经 XTU 代理' : v === 'none' ? '不经任何代理直接连接' : '';
+  };
+  f.proxy_mode.onchange = syncProxy; syncProxy();
   $$('[data-m]', m).forEach(b => b.onclick = () => {
     mode = b.dataset.m;
     $$('[data-m]', m).forEach(x => x.classList.toggle('active', x === b));
@@ -947,6 +965,7 @@ function quickAddDialog() {
       temp_days: f.temp_days.value ? +f.temp_days.value : null, server_type: f.server_type.value,
       install_key: f.install_key.checked, write_config: f.write_config.checked,
       port: +f.port.value || 22, username: f.username.value || 'root', group: f.group.value || null,
+      proxy_mode: f.proxy_mode.value, socks: f.socks.value, proxy_command: f.proxy_command.value,
     };
     if (mode === 'one') {
       if (!f.host.value || !f.password.value) return toast('请填写 IP 和密码', 'error');
@@ -962,11 +981,23 @@ function quickAddDialog() {
     } else {
       if (!f.batch.value.trim()) return toast('请粘贴服务器列表', 'error');
       body.batch = f.batch.value;
-      $('#qaRes', m).innerHTML = '<div class="muted small">正在并发添加…</div>';
+      const lines = f.batch.value.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+      $('#qaRes', m).innerHTML = `<div class="muted small">正在添加 ${lines.length} 台(内网经代理,可能需要十几秒)…</div>`;
       const res = await api('/servers/quick', { method: 'POST', body });
-      $('#qaRes', m).innerHTML = res.map(r => `<details class="result-item" ${r.ok ? '' : 'open'}><summary>
-        <span class="badge ${r.ok ? 'green' : 'red'}">${r.ok ? '成功' : '失败'}</span><b>${esc(r.ok ? r.server.name : r.host)}</b>
-        <span class="muted small">${esc(r.ok ? r.host : r.error)}</span></summary>${r.ok ? `<div style="padding:8px 14px">${stepList(r.steps)}</div>` : ''}</details>`).join('');
+      const okN = res.filter(r => r.ok).length;
+      $('#qaRes', m).innerHTML = `<div class="row qa-sum"><span class="badge green">成功 ${okN}</span>${okN < res.length ? `<span class="badge red">失败 ${res.length - okN}</span>` : ''}
+          <span class="grow"></span>${okN < res.length ? '<button class="btn sm" id="qaRetry">只保留失败项,修改后重试</button>' : ''}</div>
+        ${res.map((r, i) => {
+          const p = lines[i]?.trim().split(/[\s,]+/) || [];
+          const addr = `${p[3] || f.username.value || 'root'}@${r.host}:${p[2] || f.port.value || 22}`;
+          return `<div class="qa-row ${r.ok ? 'ok' : 'bad'}">
+            <div class="row" style="flex-wrap:nowrap"><span class="dot ${r.ok ? 'green' : 'red'}"></span><b class="mono">${esc(addr)}</b>
+              ${r.ok ? `<span class="badge">${esc(r.server.name)}</span>${statusBadge(r.server.status)}<span class="grow"></span><button class="btn sm ghost" data-open="${r.server.id}">详情</button>` : ''}</div>
+            ${r.ok ? `<div class="qa-steps">${stepList(r.steps)}</div>` : `<div class="qa-err">${esc(r.error)}</div>`}</div>`;
+        }).join('')}`;
+      $$('[data-open]', m).forEach(b => b.onclick = () => { m.close(); openDetail(+b.dataset.open); });
+      const retry = $('#qaRetry', m);
+      if (retry) retry.onclick = () => { f.batch.value = res.map((r, i) => r.ok ? null : lines[i]).filter(Boolean).join('\n'); f.batch.focus(); };
     }
     loadServers();
   });
@@ -1197,6 +1228,125 @@ function auditTable(items, withServer = true) {
       <td class="mono small" style="max-width:420px;word-break:break-all">${esc(a.detail || '')}</td></tr>`).join('')}</tbody></table>`;
 }
 
+/* ================= 服务器地图 ================= */
+const ECHARTS = 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js';
+const GEOJSON = { china: 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/china.json', world: 'https://cdn.jsdelivr.net/npm/echarts@4.9.0/map/json/world.json' };
+function loadScript(src) {
+  return new Promise((ok, fail) => {
+    if (window.echarts) return ok();
+    const el = Object.assign(document.createElement('script'), { src, onload: ok, onerror: () => fail(new Error('地图组件加载失败,请检查网络')) });
+    document.head.append(el);
+  });
+}
+async function ensureMap(name) {
+  await loadScript(ECHARTS);
+  if (!echarts.getMap(name)) echarts.registerMap(name, await fetch(GEOJSON[name]).then(r => r.json()));
+}
+const MAP_COLORS = { online: '#3ddc84', compute: '#b197fc', warn: '#ffb547', bad: '#ff5c7a', hub: '#ffd166' };
+function groupColor(g) {
+  if (g.servers.some(x => ['offline', 'hostkey_mismatch'].includes(x.status))) return MAP_COLORS.bad;
+  if (g.servers.some(x => ['auth_failed', 'error'].includes(x.status))) return MAP_COLORS.warn;
+  if (g.servers.some(x => x.kind === 'compute')) return MAP_COLORS.compute;
+  return MAP_COLORS.online;
+}
+function groupTip(g) {
+  return `<div style="font-weight:700;font-size:14px;margin-bottom:6px">${esc(g.place)} <span style="opacity:.6;font-weight:400">${g.servers.length} 台</span></div>` +
+    g.servers.slice(0, 12).map(x => `<div style="display:flex;gap:8px;align-items:center;line-height:1.9">
+      <span style="width:7px;height:7px;border-radius:50%;background:${x.status === 'online' ? (x.kind === 'compute' ? MAP_COLORS.compute : MAP_COLORS.online) : MAP_COLORS.bad}"></span>
+      <b>${esc(x.name)}</b><span style="opacity:.6">${esc(x.gpu || x.os || '')}</span></div>`).join('') +
+    (g.servers.length > 12 ? `<div style="opacity:.6">… 还有 ${g.servers.length - 12} 台</div>` : '');
+}
+
+PAGES.map = async () => {
+  S.mapView = S.mapView || 'china';
+  $('#main').innerHTML = `<div class="page-head"><div><h1>服务器地图</h1><div class="sub" id="mapSub">加载中…</div></div>
+      <div class="row"><div class="seg" id="mapSeg"><button data-v="china" class="${S.mapView === 'china' ? 'active' : ''}">中国</button><button data-v="world" class="${S.mapView === 'world' ? 'active' : ''}">世界</button></div>
+      <button class="btn" id="mapReload">${ICON.refresh}刷新</button></div></div>
+    <div class="map-wrap"><div class="map-grid"></div><div id="mapChart"></div>
+      <div class="map-hud" id="mapHud"></div>
+      <div class="map-legend">${[['在线', MAP_COLORS.online], ['算力', MAP_COLORS.compute], ['异常', MAP_COLORS.warn], ['离线', MAP_COLORS.bad], ['内网枢纽', MAP_COLORS.hub]]
+        .map(([l, c]) => `<span><i style="background:${c};box-shadow:0 0 8px ${c}"></i>${l}</span>`).join('')}</div>
+      <div class="map-panel" id="mapPanel"></div></div>`;
+  $$('#mapSeg button').forEach(b => b.onclick = () => { S.mapView = b.dataset.v; PAGES.map(); });
+  $('#mapReload').onclick = () => PAGES.map();
+  const [data] = await Promise.all([api('/map'), ensureMap(S.mapView)]);
+  if (location.hash !== '#map' || !$('#mapChart')) return;
+  const hub = data.hub.coord;
+  const groups = {};
+  data.points.forEach(p => {
+    const key = p.intranet ? 'hub' : p.coord.map(x => x.toFixed(1)).join(',');
+    (groups[key] ||= { key, place: p.place, coord: p.coord, intranet: p.intranet, servers: [] }).servers.push(p);
+  });
+  const list = Object.values(groups).sort((a, b) => b.servers.length - a.servers.length);
+  const remote = list.filter(g => !g.intranet);
+  const hubGroup = groups.hub || { key: 'hub', place: data.hub.name, coord: hub, intranet: true, servers: [] };
+  const total = data.points.length, online = data.points.filter(p => p.status === 'online').length;
+  $('#mapSub').textContent = `内网 / 经代理服务器定位于 ${data.hub.name}${data.unlocated ? `,另有 ${data.unlocated} 台暂无位置信息` : ''}`;
+  $('#mapHud').innerHTML = [['地点', list.length || 1], ['服务器', total], ['在线', online], ['算力', data.points.filter(p => p.kind === 'compute').length]]
+    .map(([l, v]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+  $('#mapPanel').innerHTML = `<div class="mp-title">分布</div>` + [hubGroup, ...remote].filter(g => g.servers.length).map(g => `
+    <div class="mp-group"><div class="mp-head"><i style="background:${g.intranet ? MAP_COLORS.hub : groupColor(g)}"></i><b>${esc(g.place)}</b>${g.intranet ? '<em>内网</em>' : ''}<span>${g.servers.length}</span></div>
+      ${g.servers.map(x => `<div class="mp-srv" data-id="${x.id}"><span class="dot ${x.status === 'online' ? 'green' : x.status === 'offline' ? 'red' : 'orange'}"></span>
+        <span class="n">${esc(x.name)}</span>${x.kind === 'compute' ? '<span class="tag">GPU</span>' : ''}<span class="l">${x.latency != null ? x.latency + 'ms' : ''}</span></div>`).join('')}
+    </div>`).join('');
+  $$('.mp-srv').forEach(el => el.onclick = () => openDetail(+el.dataset.id));
+
+  const chart = S.chart = echarts.init($('#mapChart'));
+  const china = S.mapView === 'china';
+  const lineColor = new echarts.graphic.LinearGradient(0, 0, 1, 0, [{ offset: 0, color: '#ffd166' }, { offset: 1, color: '#7dd3fc' }]);
+  chart.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item', backgroundColor: 'rgba(8,14,30,.94)', borderColor: 'rgba(125,211,252,.35)', borderWidth: 1, padding: [10, 14],
+      textStyle: { color: '#e6edff', fontSize: 12 }, extraCssText: 'box-shadow:0 0 24px rgba(56,189,248,.25);border-radius:10px;',
+      formatter: p => p.data?.g ? groupTip(p.data.g) : p.seriesType === 'lines' ? `${esc(data.hub.name)} → ${esc(p.data.g?.place || '')}` : esc(p.name || ''),
+    },
+    geo: {
+      map: S.mapView, roam: true, zoom: china ? 1.18 : 1.6, center: china ? [101.5, 35.8] : [96, 28], scaleLimit: { min: 0.8, max: 12 },
+      itemStyle: {
+        areaColor: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: '#10265a' }, { offset: 1, color: '#081736' }] },
+        borderColor: 'rgba(96,165,250,.55)', borderWidth: 0.8, shadowColor: 'rgba(56,189,248,.6)', shadowBlur: 14,
+      },
+      emphasis: { itemStyle: { areaColor: '#1a3d80' }, label: { show: true, color: '#cfe3ff' } },
+      label: { show: false },
+      regions: [{ name: '湖南', itemStyle: { areaColor: '#173f7a', borderColor: 'rgba(255,209,102,.8)', borderWidth: 1.2, shadowColor: 'rgba(255,209,102,.45)', shadowBlur: 18 } }],
+    },
+    series: [
+      { type: 'lines', coordinateSystem: 'geo', zlevel: 1, silent: true,
+        lineStyle: { color: '#7dd3fc', width: 4, opacity: 0.07, curveness: 0.28 },
+        data: remote.map(g => ({ coords: [hub, g.coord] })) },
+      { type: 'lines', coordinateSystem: 'geo', zlevel: 2,
+        effect: { show: true, period: 3.6, trailLength: 0.5, symbol: 'arrow', symbolSize: 7, color: '#bff0ff' },
+        lineStyle: { color: lineColor, width: 1.3, opacity: 0.7, curveness: 0.28 },
+        data: remote.map(g => ({ coords: [hub, g.coord], g })) },
+      { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3, rippleEffect: { brushType: 'stroke', scale: 4.5, period: 3.2 },
+        symbolSize: d => d[2], showEffectOn: 'render',
+        label: { show: true, position: 'right', distance: 8, formatter: p => `{n|${p.data.g.place}}  {c|${p.data.g.servers.length}}`,
+          rich: { n: { color: '#e6edff', fontSize: 12, fontWeight: 600, textShadowColor: '#000', textShadowBlur: 6 },
+            c: { color: '#0b1020', backgroundColor: '#bff0ff', borderRadius: 8, padding: [1, 6], fontSize: 11, fontWeight: 700 } } },
+        data: remote.map(g => ({ name: g.place, value: [...g.coord, 10 + Math.min(16, g.servers.length * 3)], g,
+          itemStyle: { color: groupColor(g), shadowBlur: 22, shadowColor: groupColor(g) } })) },
+      { type: 'effectScatter', coordinateSystem: 'geo', zlevel: 4, rippleEffect: { brushType: 'fill', scale: 5, period: 2.6 },
+        symbol: 'diamond', symbolSize: 18 + Math.min(14, hubGroup.servers.length * 1.5),
+        itemStyle: { color: MAP_COLORS.hub, shadowBlur: 30, shadowColor: MAP_COLORS.hub },
+        label: { show: true, position: 'bottom', distance: 10,
+          formatter: `{n|${data.hub.name}}\n{s|内网枢纽 · ${hubGroup.servers.length} 台}`,
+          rich: { n: { color: '#ffe6a3', fontSize: 14, fontWeight: 700, align: 'center', textShadowColor: '#000', textShadowBlur: 8, lineHeight: 20 },
+            s: { color: '#ffd166', fontSize: 11, align: 'center' } } },
+        data: [{ name: data.hub.name, value: hub, g: hubGroup }] },
+    ],
+  });
+  chart.on('click', p => {
+    const g = p.data?.g;
+    if (!g || !g.servers.length) return;
+    if (g.servers.length === 1) return openDetail(g.servers[0].id);
+    const el = $(`.mp-group .mp-srv[data-id="${g.servers[0].id}"]`)?.closest('.mp-group');
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200); }
+  });
+  const ro = new ResizeObserver(() => chart.resize());
+  ro.observe($('#mapChart'));
+};
+
 /* ================= 自动化 ================= */
 const TEMPLATES = {
   '磁盘巡检(使用率 > 80% 告警)': `df -hP | awk 'NR>1 && $5+0 > 80 {print "磁盘告警:", $6, $5; f=1} END {if(!f) print "磁盘正常"}'`,
@@ -1403,6 +1553,8 @@ PAGES.settings = async () => {
         <div class="field"><label>默认轮换周期(天)</label><input class="input" name="default_rotation_days" type="number" min="1" value="${st.default_rotation_days}"></div>
         <div class="field"><label>命令默认超时(秒)</label><input class="input" name="exec_timeout" type="number" min="1" value="${st.exec_timeout}"></div>
         <div class="field"><label>Web 会话有效期(小时)</label><input class="input" name="session_hours" type="number" min="1" value="${st.session_hours}"></div>
+        <div class="field"><label>内网 / 代理服务器地图位置</label><input class="input" name="intranet_location" value="${esc(st.intranet_location)}"></div>
+        <div class="field"><label>该位置坐标(经度,纬度)</label><input class="input mono" name="intranet_coords" value="${esc(st.intranet_coords)}"></div>
         <div class="field full"><label class="check"><input type="checkbox" name="geo_lookup" ${st.geo_lookup ? 'checked' : ''}>自动识别公网 IP 归属地(调用 ip-api.com,仅发送服务器 IP)</label></div>
         <div class="field full"><label>Agent 命令拦截规则(正则,每行一条)</label>
           <textarea class="input mono" name="agent_deny_patterns" rows="7">${esc(st.agent_deny_patterns.join('\n'))}</textarea>
@@ -1437,7 +1589,7 @@ PAGES.settings = async () => {
   drawKc(kc.enabled);
   $('#saveSt').onclick = e => { e.preventDefault(); busy(e.currentTarget, async () => {
     const f = $('#stf');
-    const body = Object.fromEntries([...new FormData(f)].map(([k, v]) => [k, k === 'agent_deny_patterns' ? v : +v]));
+    const body = Object.fromEntries([...new FormData(f)].map(([k, v]) => [k, ['agent_deny_patterns', 'intranet_location', 'intranet_coords'].includes(k) ? v : +v]));
     body.geo_lookup = f.geo_lookup.checked;
     await api('/settings', { method: 'PUT', body });
     toast('设置已保存', 'ok');

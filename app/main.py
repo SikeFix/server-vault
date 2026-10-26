@@ -26,9 +26,13 @@ log = logging.getLogger("server-vault")
 async def lifespan(app):
     if AUTO_UNLOCK_PASSWORD and vault.initialized:
         log.info("使用 SV_MASTER_PASSWORD 自动解锁: %s", "成功" if vault.unlock(AUTO_UNLOCK_PASSWORD) else "失败")
+    unlock_task = None
     if not vault.unlocked and vault.initialized and db.get_meta("keychain_unlock") == "1":
-        pw = await asyncio.to_thread(keychain.get)
-        log.info("从 macOS 钥匙串自动解锁: %s", "成功" if pw and vault.unlock(pw) else "失败")
+        # 放到后台:钥匙串可能弹出授权对话框,不能阻塞服务启动
+        async def keychain_unlock():
+            pw = await asyncio.to_thread(keychain.get)
+            log.info("从 macOS 钥匙串自动解锁: %s", "成功" if pw and vault.unlock(pw) else "失败")
+        unlock_task = asyncio.create_task(keychain_unlock())
     task = asyncio.create_task(scheduler.loop())
     yield
     task.cancel()
@@ -174,7 +178,8 @@ def servers(group: str = None, status: str = None, q: str = None, kind: str = No
 
 @api.post("/servers/quick")
 def quick(payload: dict = Body(...)):
-    opts = {k: payload.get(k) for k in ("port", "username", "group", "server_type", "temp_days", "install_key", "write_config")
+    opts = {k: payload.get(k) for k in ("port", "username", "group", "server_type", "temp_days", "install_key", "write_config",
+                                       "proxy_mode", "socks", "proxy_command")
             if payload.get(k) not in (None, "")}
     if payload.get("batch"):
         items = quick_add.parse_batch(payload["batch"], opts)
@@ -185,9 +190,14 @@ def quick(payload: dict = Body(...)):
             except Exception as e:
                 return {"ok": False, "host": item["host"], "error": str(e)}
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(8, len(items) or 1)) as pool:
+        with ThreadPoolExecutor(max_workers=min(4, len(items) or 1)) as pool:
             return list(pool.map(one, items))
     return quick_add.quick_add(payload.get("host"), payload.get("password"), name=payload.get("name"), **opts)
+
+
+@api.get("/map")
+def map_data():
+    return S.map_data()
 
 
 @api.get("/servers/{sid}/gpu")

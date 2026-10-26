@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, NSMenuDe
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         config.websiteDataStore = .default()
+        config.applicationNameForUserAgent = "ServerVaultApp/1.5"
         webView = makeWebView(frame: NSRect(x: 0, y: 0, width: 1360, height: 860))
         showLoading("正在启动 Server Vault…")
         ensureServer()
@@ -150,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, NSMenuDe
                              backing: .buffered, defer: false)
             w.title = "Server Vault"
             w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
             w.contentView = webView
             w.isReleasedWhenClosed = false
             w.minSize = NSSize(width: 900, height: 600)

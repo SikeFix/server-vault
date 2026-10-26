@@ -54,8 +54,9 @@ def aliases():
     return out
 
 
-def resolve(alias) -> dict:
-    p = subprocess.run(["ssh", "-G", alias], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+def resolve(alias, port=None, user=None) -> dict:
+    args = ["ssh", "-G"] + (["-p", str(port)] if port else []) + (["-l", user] if user else []) + [alias]
+    p = subprocess.run(args, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     cfg = {}
     for line in p.stdout.splitlines():
         k, _, v = line.partition(" ")
@@ -183,7 +184,16 @@ def _backup_config(cfg):
             bak.write_text(cfg.read_text())
 
 
-def add_config_block(name, alias, host, port, user, identity):
+def proxy_for(host, port=22, user="root") -> str:
+    """按本机 ~/.ssh/config 规则(含 Match / 通配符)得到该地址应使用的 ProxyCommand。"""
+    try:
+        v = resolve(host, port, user).get("proxycommand", "")
+    except Exception:
+        return ""
+    return "" if v.lower() == "none" else v
+
+
+def add_config_block(name, alias, host, port, user, identity, proxy=None):
     SSH_DIR.mkdir(mode=0o700, exist_ok=True)
     cfg = SSH_DIR / "config"
     _backup_config(cfg)
@@ -196,9 +206,12 @@ def add_config_block(name, alias, host, port, user, identity):
         lines.append(f"  Port {port}")
     if ident:
         lines.append(f"  IdentityFile {ident}")
+    if proxy:
+        lines.append(f"  ProxyCommand {proxy}")
     lines.append(end)
     old = cfg.read_text() if cfg.exists() else ""
-    cfg.write_text(old.rstrip("\n") + ("\n\n" if old.strip() else "") + "\n".join(lines) + "\n")
+    # 放在文件开头:OpenSSH 取最先出现的值,这样本条目的设置不会被后面的通配规则覆盖
+    cfg.write_text("\n".join(lines) + "\n\n" + old.lstrip("\n") if old.strip() else "\n".join(lines) + "\n")
     os.chmod(cfg, 0o600)
 
 

@@ -248,6 +248,14 @@ def run_tests(mock2_stop, data_dir):
     ok(all(x["id"] != q["id"] for x in c.get("/api/servers").json()), "临时服务器到期自动移除")
     ok(f"server-vault: {q['name']}" not in (SSH_DIR / "config").read_text() and "Host existing" in (SSH_DIR / "config").read_text(), "移除时同步清理 ssh config")
 
+    print("[6e] 服务器地图")
+    mp = c.get("/api/map").json()
+    ok(mp["hub"]["name"] == "湖南 · 湘潭" and mp["hub"]["coord"] == [112.9442, 27.8297], "内网枢纽默认湖南湘潭")
+    ok(mp["points"] and all(p["intranet"] and p["coord"] == mp["hub"]["coord"] for p in mp["points"]), "内网 / 本地地址服务器定位到湘潭")
+    c.put("/api/settings", json={"intranet_location": "测试机房", "intranet_coords": "120.1,30.2"})
+    ok(c.get("/api/map").json()["hub"] == {"name": "测试机房", "coord": [120.1, 30.2]}, "可在设置中修改内网位置")
+    c.put("/api/settings", json={"intranet_location": "湖南 · 湘潭", "intranet_coords": "112.9442,27.8297"})
+
     print("[7] 自动化任务")
     a = c.post("/api/automations", json={"name": "巡检", "script": "echo check-$(whoami)", "target_type": "group",
                                          "target_value": ["生产", "测试"], "interval_minutes": 0}).json()
