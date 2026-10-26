@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "notAfter=Jan 10 12:00:00 2027 GMT"

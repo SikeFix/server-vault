@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+  --version) echo "Docker version 27.1.1, build 6312585";;
+  ps) echo "ghost|ghost:5-alpine|127.0.0.1:2368->2368/tcp|Up 3 days"; echo "redis|redis:7|6379/tcp|Up 3 days";;
+esac

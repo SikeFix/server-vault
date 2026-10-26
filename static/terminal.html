@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>终端 · Server Vault</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <style>
+    html, body { margin: 0; height: 100%; background: #0f1525; color: #d6deef; font: 13px -apple-system, "PingFang SC", sans-serif; }
+    .bar { height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 14px; background: #161e33; border-bottom: 1px solid #222c47; }
+    .bar b { color: #fff; }
+    .bar .st { margin-left: auto; font-size: 12px; }
+    .bar button { background: #26304d; color: #d6deef; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+    .bar button:hover { background: #313d61; }
+    #term { position: absolute; top: 38px; left: 0; right: 0; bottom: 0; padding: 6px 0 0 8px; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <b id="title">连接中…</b><span id="host" style="color:#8a94ad"></span>
+    <span class="st" id="st">●</span>
+    <button id="reconnect">重新连接</button>
+  </div>
+  <div id="term"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    const term = new Terminal({ cursorBlink: true, fontSize: 14, fontFamily: 'Menlo, Consolas, monospace',
+      theme: { background: '#0f1525', foreground: '#d6deef' }, scrollback: 10000 });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById('term'));
+    fit.fit();
+    let ws = null;
+    const st = document.getElementById('st');
+    const setSt = (t, c) => { st.textContent = '● ' + t; st.style.color = c; };
+
+    fetch('/api/servers/' + id).then(r => r.ok ? r.json() : null).then(s => {
+      if (!s) return;
+      document.title = s.name + ' · 终端';
+      document.getElementById('title').textContent = s.name;
+      document.getElementById('host').textContent = `${s.username}@${s.host}:${s.port}`;
+    });
+
+    function connect() {
+      if (ws) ws.close();
+      term.reset();
+      setSt('连接中', '#f5b041');
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws/terminal/${id}?cols=${term.cols}&rows=${term.rows}`);
+      ws.onopen = () => setSt('已连接', '#4ade80');
+      ws.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.type === 'data') term.write(m.data);
+        else if (m.type === 'error') { term.write('\r\n\x1b[31m连接失败: ' + m.data + '\x1b[0m\r\n'); setSt('失败', '#f87171'); }
+        else if (m.type === 'exit') { term.write('\r\n\x1b[33m[会话已结束]\x1b[0m\r\n'); }
+      };
+      ws.onclose = e => {
+        if (e.code === 4401) term.write('\r\n\x1b[31m未登录或保险库已锁定,请先在管理页面解锁\x1b[0m\r\n');
+        setSt('已断开', '#f87171');
+      };
+    }
+    term.onData(d => ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'data', data: d })));
+    term.onResize(({ cols, rows }) => ws && ws.readyState === 1 && ws.send(JSON.stringify({ type: 'resize', cols, rows })));
+    window.addEventListener('resize', () => fit.fit());
+    document.getElementById('reconnect').onclick = connect;
+    connect();
+    term.focus();
+  </script>
+</body>
+</html>
